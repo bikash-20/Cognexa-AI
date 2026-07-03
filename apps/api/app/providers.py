@@ -122,8 +122,9 @@ async def _openrouter(system: str, user: str, *, timeout: float) -> str:
 async def _pollinations(system: str, user: str, *, timeout: float) -> str:
     """Free; no API key. Used as the last-resort fallback.
 
-    This function NEVER raises uncaught — every error path is captured so
-    the chain can move on and `generate()` can return the degraded reply.
+    Pollinations hosts several free models behind the same OpenAI-shaped
+    `/openai` endpoint. We try them in order; first 2xx with non-empty
+    content wins. NEVER raises uncaught — every error path is captured.
     """
     cb = _cb("pollinations")
     if not cb.ok():
@@ -134,57 +135,52 @@ async def _pollinations(system: str, user: str, *, timeout: float) -> str:
     sys_short = system[-1800:] if len(system) > 1800 else system
     user_short = user[-1800:] if len(user) > 1800 else user
 
-    # ---- Path 1: OpenAI-shaped POST ----------------------------------------
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as cx:
-            r = await cx.post(
-                "https://text.pollinations.ai/openai",
-                headers=headers,
-                json={
-                    "model": "openai",
-                    "messages": [
-                        {"role": "system", "content": sys_short},
-                        {"role": "user", "content": user_short},
-                    ],
-                    "private": True,
-                    "seed": 42,
-                },
-            )
-            if r.status_code < 400:
+    # Curated list of currently-free Pollinations models. Order matters:
+    # the first one that returns a usable answer wins.
+    models = ["openai", "openai-fast", "qwen-coder", "mistral", "llama"]
+
+    last_err: Exception | None = None
+    for model in models:
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as cx:
+                r = await cx.post(
+                    "https://text.pollinations.ai/openai",
+                    headers=headers,
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": sys_short},
+                            {"role": "user", "content": user_short},
+                        ],
+                        "private": True,
+                        "seed": 42,
+                    },
+                )
+                if r.status_code >= 400:
+                    raise RuntimeError(f"http {r.status_code}")
                 try:
                     data = r.json()
                 except Exception as je:
-                    log.warning(json_event("pollinations.json_fail", error=type(je).__name__))
-                    data = None
-                if isinstance(data, dict):
-                    choices = data.get("choices") or [{}]
-                    msg = choices[0].get("message") or {} if choices else {}
-                    text = (msg.get("content") if isinstance(msg, dict) else "") or ""
-                    if text.strip():
-                        cb.failures.clear()
-                        return text.strip()
-    except Exception as e:
-        log.warning(json_event("pollinations.openai_fail", error=type(e).__name__))
-
-    # ---- Path 2: legacy POST /  --------------------------------------------
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as cx:
-            r = await cx.post(
-                "https://text.pollinations.ai/",
-                headers={**headers, "accept": "text/plain"},
-                params={"model": "openai", "private": "true"},
-                content=f"{sys_short}\n\n{user_short}".encode("utf-8"),
-            )
-            if r.status_code < 400:
-                text = (r.text or "").strip()
-                if text:
-                    cb.failures.clear()
-                    return text
-    except Exception as e:
-        log.warning(json_event("pollinations.legacy_fail", error=type(e).__name__))
+                    raise RuntimeError(f"json: {type(je).__name__}") from je
+                if not isinstance(data, dict):
+                    raise RuntimeError("non-dict response")
+                choices = data.get("choices") or [{}]
+                if not choices:
+                    raise RuntimeError("no choices")
+                msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+                text = (msg.get("content") if isinstance(msg, dict) else "") or ""
+                if not text.strip():
+                    raise RuntimeError("empty content")
+                cb.failures.clear()
+                log.info(json_event("pollinations.model.ok", model=model))
+                return text.strip()
+        except Exception as e:
+            last_err = e
+            log.warning(json_event("pollinations.model.fail", model=model, error=type(e).__name__))
+            continue
 
     cb.trip()
-    raise RuntimeError("pollinations both paths failed")
+    raise RuntimeError(f"all pollinations models failed: {type(last_err).__name__ if last_err else 'unknown'}")
 
 
 _CHAIN: list[tuple[str, Callable[..., Awaitable[str]]]] = [
