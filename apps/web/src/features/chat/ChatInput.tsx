@@ -143,7 +143,7 @@ export function ChatInput({ onSend, disabled }: Props) {
         )}
         <div
           ref={composeRef}
-          className="glass-strong relative flex items-end rounded-2xl p-1.5 transition focus-within:shadow-[0_0_0_1px_var(--primary-glow-2),0_0_18px_-2px_var(--primary-halo)]"
+          className="glass-strong relative flex items-end gap-1 rounded-2xl p-1.5 transition focus-within:shadow-[0_0_0_1px_var(--primary-glow-2),0_0_18px_-2px_var(--primary-halo)]"
         >
           <button
             type="button"
@@ -177,34 +177,21 @@ export function ChatInput({ onSend, disabled }: Props) {
           />
           <button
             type="button"
-            title="Wrap math in $…$ for inline, $$…$$ for blocks"
-            aria-label="Math formatting hint"
-            className="grid h-8 w-8 shrink-0 place-items-center self-end rounded-lg text-theme-muted transition hover:bg-white/10 hover:text-theme-strong"
+            onClick={submit}
+            disabled={!canSend}
+            aria-label="Send message"
+            title="Send (Enter)"
+            className="grid h-9 w-9 shrink-0 place-items-center self-end rounded-xl bg-gradient-to-br from-[color:var(--accent-from)] to-[color:var(--accent-to)] text-white shadow-[0_4px_14px_-6px_var(--primary-halo)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-30 disabled:shadow-none"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M4 7h4l2 10 2-10h4" />
-              <path d="M3 3l18 18" opacity="0.4" />
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <line x1="5" y1="12" x2="19" y2="12" />
+              <polyline points="13 6 19 12 13 18" />
             </svg>
           </button>
         </div>
         <div className="mt-1.5 flex items-center justify-between px-1 text-[11px] text-theme-muted">
           <span>{hasUploading ? 'Uploading…' : ACCEPT_HINT}</span>
           <span className="hidden sm:inline">Enter to send · Shift+Enter for newline · drop files here</span>
-        </div>
-        <div className="mt-2 flex justify-end">
-          <button
-            type="button"
-            onClick={submit}
-            disabled={!canSend}
-            aria-label="Send message"
-            title="Send"
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-[color:var(--accent-from)] to-[color:var(--accent-to)] text-white shadow-[0_4px_18px_-6px_var(--primary-halo)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <line x1="5" y1="12" x2="19" y2="12" />
-              <polyline points="13 6 19 12 13 18" />
-            </svg>
-          </button>
         </div>
       </div>
     </div>
