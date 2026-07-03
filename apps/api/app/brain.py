@@ -27,8 +27,12 @@ def _looks_like_math(text: str) -> bool:
 
 
 def _looks_like_code(text: str) -> bool:
-    return bool(re.search(r"\b(python|javascript|typescript|java|c\+\+|rust|go|sql|regex|algorithm)\b", text, re.I)) or \
-           bool(re.search(r"```|def |class |function |algorithm|complexity|O\(n", text))
+    # Only treat as code if user is asking for code/algorithm/implementation,
+    # not if they merely mention a language name in a conceptual question.
+    code_signal = re.search(r"\b(python|javascript|typescript|java|c\+\+|rust|go|sql|regex)\b", text, re.I) and \
+                  re.search(r"\b(code|program|script|function|class|implement|write|solve|algorithm|complexity|example|snippet|debug|compile|syntax)\b", text, re.I)
+    boilerplate = re.search(r"```|^\s*def\s|^\s*class\s|\bfunction\s*\(|O\(n\)|O\(n\^2\)", text, re.M)
+    return bool(code_signal or boilerplate)
 
 
 def _looks_like_science(text: str) -> bool:

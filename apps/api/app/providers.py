@@ -122,25 +122,19 @@ async def _openrouter(system: str, user: str, *, timeout: float) -> str:
 async def _pollinations(system: str, user: str, *, timeout: float) -> str:
     """Free; no API key. Used as the last-resort fallback.
 
-    Pollinations exposes several endpoints:
-      1. POST /openai  — OpenAI-shaped, accepts long prompts.
-      2. GET  /{prompt} — always-on, no key, but truncates long URLs (~1k chars).
-      3. POST / (legacy) — also accepts long prompts.
-
-    For long study questions we MUST use a POST endpoint, since the system
-    prompt alone is ~700 chars and would blow past GET URL limits.
+    This function NEVER raises uncaught — every error path is captured so
+    the chain can move on and `generate()` can return the degraded reply.
     """
     cb = _cb("pollinations")
-    if not cb.ok(): raise RuntimeError("circuit-open")
+    if not cb.ok():
+        raise RuntimeError("circuit-open")
 
     headers = {"accept": "application/json", "user-agent": "cognexa-ai/1.0"}
 
-    # Truncate aggressively for safety — Pollinations' shared endpoint is flaky
-    # past ~4k tokens of combined prompt.
     sys_short = system[-1800:] if len(system) > 1800 else system
     user_short = user[-1800:] if len(user) > 1800 else user
 
-    # ---- Path 1: OpenAI-shaped POST (long prompt safe) ---------------------
+    # ---- Path 1: OpenAI-shaped POST ----------------------------------------
     try:
         async with httpx.AsyncClient(timeout=timeout) as cx:
             r = await cx.post(
@@ -163,14 +157,16 @@ async def _pollinations(system: str, user: str, *, timeout: float) -> str:
                     log.warning(json_event("pollinations.json_fail", error=type(je).__name__))
                     data = None
                 if isinstance(data, dict):
-                    text = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+                    choices = data.get("choices") or [{}]
+                    msg = choices[0].get("message") or {} if choices else {}
+                    text = (msg.get("content") if isinstance(msg, dict) else "") or ""
                     if text.strip():
                         cb.failures.clear()
                         return text.strip()
-    except Exception as e:  # noqa: BLE001 — fall through
+    except Exception as e:
         log.warning(json_event("pollinations.openai_fail", error=type(e).__name__))
 
-    # ---- Path 2: legacy POST /  (also accepts long prompts) ----------------
+    # ---- Path 2: legacy POST /  --------------------------------------------
     try:
         async with httpx.AsyncClient(timeout=timeout) as cx:
             r = await cx.post(
@@ -179,17 +175,16 @@ async def _pollinations(system: str, user: str, *, timeout: float) -> str:
                 params={"model": "openai", "private": "true"},
                 content=f"{sys_short}\n\n{user_short}".encode("utf-8"),
             )
-            r.raise_for_status()
-            text = (r.text or "").strip()
-            if text:
-                cb.failures.clear()
-                return text
+            if r.status_code < 400:
+                text = (r.text or "").strip()
+                if text:
+                    cb.failures.clear()
+                    return text
     except Exception as e:
-        cb.trip()
-        raise RuntimeError(f"pollinations both POST paths failed: {type(e).__name__}") from e
+        log.warning(json_event("pollinations.legacy_fail", error=type(e).__name__))
 
     cb.trip()
-    raise RuntimeError("pollinations returned empty response")
+    raise RuntimeError("pollinations both paths failed")
 
 
 _CHAIN: list[tuple[str, Callable[..., Awaitable[str]]]] = [
@@ -208,11 +203,21 @@ async def generate(system: str, user: str, *, timeout: float) -> tuple[str, str]
             if name != _CHAIN[0][0]:
                 log.warning(json_event("provider.fallback", chosen=name))
             return text, name
-        except Exception as e:
-            _cb(name).trip()
+        except Exception as e:  # noqa: BLE001 — must NEVER leak past generate()
+            try:
+                _cb(name).trip()
+            except Exception:
+                pass
             last_err = e
-            log.warning(json_event("provider.fail", name=name, error=type(e).__name__))
-    log.error(json_event("provider.exhausted", error=str(last_err)))
+            try:
+                log.warning(json_event("provider.fail", name=name, error=type(e).__name__))
+            except Exception:
+                pass
+            continue
+    try:
+        log.error(json_event("provider.exhausted", error=str(last_err) if last_err else "unknown"))
+    except Exception:
+        pass
     return ("I'm having trouble reaching my reasoning providers right now. Your message was saved — please try again in a moment.", "degraded")
 
 
