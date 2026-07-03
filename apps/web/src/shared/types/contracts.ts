@@ -12,7 +12,7 @@ export const ChatMessageSchema = z.object({
   id: z.string().uuid(),
   role: MessageRole,
   content: z.string().min(1).max(20_000),
-  created_at: z.string().datetime({ offset: true }).or(z.string().datetime({ offset: false })),
+  created_at: z.string(),
   layer: BrainLayer.optional(),
   sources: z.array(z.string()).nullable().optional()
 });
