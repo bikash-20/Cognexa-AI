@@ -1,0 +1,85 @@
+@import 'katex/dist/katex.min.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+:root {
+  color-scheme: light dark;
+  --bg-grad-1: #1a0a12;
+  --bg-grad-2: #3a1622;
+  --bg-grad-3: #5a2c3a;
+}
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: theme('fontFamily.sans');
+  background:
+    radial-gradient(1200px 800px at 20% 10%, var(--bg-grad-3) 0%, transparent 60%),
+    radial-gradient(900px 700px at 80% 90%, var(--bg-grad-2) 0%, transparent 55%),
+    linear-gradient(180deg, var(--bg-grad-1), var(--bg-grad-2));
+  color: theme('colors.rose.50');
+  min-height: 100dvh;
+  overflow-x: hidden;
+}
+
+/* Glass-morphism utility */
+@layer components {
+  .glass {
+    @apply rounded-2xl border border-white/15 bg-white/5 backdrop-blur-xl shadow-glass;
+  }
+  .glass-strong {
+    @apply rounded-2xl border border-white/20 bg-white/10 backdrop-blur-2xl shadow-glass-lg;
+  }
+  .glass-input {
+    @apply rounded-xl border border-white/20 bg-white/10 px-3 py-2 text-rose-50
+           placeholder-rose-200/50 outline-none focus:border-rose-300/60 focus:bg-white/15;
+  }
+  .btn-primary {
+    @apply rounded-xl bg-gradient-to-br from-rose-400 to-rose-600 px-5 py-2.5
+           font-medium text-white shadow-glass transition hover:from-rose-300 hover:to-rose-500
+           active:scale-[0.98] disabled:opacity-50;
+  }
+  .btn-ghost {
+    @apply rounded-xl border border-white/20 bg-white/5 px-4 py-2 text-rose-50
+           backdrop-blur transition hover:bg-white/10;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Markdown prose styling for AI replies */
+.prose-ai h1, .prose-ai h2, .prose-ai h3 {
+  @apply font-display tracking-wide text-rose-100;
+}
+.prose-ai h1 { @apply mt-4 mb-2 text-2xl; }
+.prose-ai h2 { @apply mt-3 mb-2 text-xl; }
+.prose-ai h3 { @apply mt-2 mb-1 text-lg; }
+.prose-ai p  { @apply my-2 leading-relaxed text-rose-50/90; }
+.prose-ai ul { @apply my-2 ml-6 list-disc; }
+.prose-ai ol { @apply my-2 ml-6 list-decimal; }
+.prose-ai code:not(pre code) {
+  @apply rounded bg-white/10 px-1.5 py-0.5 text-rose-100;
+}
+.prose-ai pre {
+  @apply my-3 overflow-x-auto rounded-xl border border-white/15 bg-wine-800/70 p-4 text-sm;
+}
+.prose-ai table {
+  @apply my-3 w-full border-collapse rounded-lg overflow-hidden;
+}
+.prose-ai th, .prose-ai td {
+  @apply border border-white/15 px-3 py-2 text-left;
+}
+.prose-ai th { @apply bg-white/10 text-rose-100; }
+.prose-ai blockquote {
+  @apply my-2 border-l-4 border-rose-400/60 bg-white/5 px-4 py-2 italic text-rose-100/80;
+}
+.prose-ai a { @apply text-rose-300 underline-offset-2 hover:underline; }
