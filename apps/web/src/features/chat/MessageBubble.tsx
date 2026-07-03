@@ -67,9 +67,13 @@ export function MessageBubble({
               />
             )}
           </>
-        ) : streaming ? (
-          <span className="inline-block h-3 w-24 animate-pulse rounded bg-white/20" />
-        ) : null}
+        ) : (
+          <span className="inline-flex items-center gap-1 py-0.5" aria-label="Thinking">
+            <span className="h-1.5 w-1.5 animate-orb-pulse rounded-full bg-[color:var(--primary-glow-1)]" />
+            <span className="h-1.5 w-1.5 animate-orb-pulse rounded-full bg-[color:var(--primary-glow-1)] [animation-delay:120ms]" />
+            <span className="h-1.5 w-1.5 animate-orb-pulse rounded-full bg-[color:var(--primary-glow-1)] [animation-delay:240ms]" />
+          </span>
+        )}
       </div>
     </article>
   );
