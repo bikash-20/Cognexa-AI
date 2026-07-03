@@ -41,8 +41,11 @@ export function App() {
 
 function RouteFallback() {
   return (
-    <div className="flex h-full min-h-screen items-center justify-center bg-wine-900">
-      <div className="h-10 w-10 animate-orb-pulse rounded-full bg-rose-400 shadow-glass-lg" />
+    <div className="flex h-full min-h-screen items-center justify-center">
+      <div
+        className="h-10 w-10 animate-orb-pulse rounded-full shadow-glass-lg"
+        style={{ background: 'linear-gradient(135deg, var(--accent-from), var(--accent-to))' }}
+      />
     </div>
   );
 }

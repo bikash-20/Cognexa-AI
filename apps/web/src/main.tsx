@@ -5,7 +5,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { App } from './App';
 import { ErrorBoundary } from './shared/ui/ErrorBoundary';
 import { registerSW } from './shared/lib/sw-register';
+import { bootstrapTheme } from './shared/lib/theme';
 import './shared/ui/global.css';
+
+bootstrapTheme();
 
 const queryClient = new QueryClient({
   defaultOptions: {

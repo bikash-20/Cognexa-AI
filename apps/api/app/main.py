@@ -1,20 +1,28 @@
 """FastAPI entry. Wires routers, exception envelope, health checks, and logging."""
 from __future__ import annotations
 import logging
+import os
+import tempfile
 from contextlib import asynccontextmanager
+from datetime import datetime
+from pathlib import Path
 from uuid import UUID, uuid4
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response, JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session as OrmSession
 
 from .config import get_settings
-from .db import init_db, get_session
-from .schemas import ChatRequest, ChatReply, TtsRequest, ErrorEnvelope, ChatMessage, BrainLayer
+from .db import init_db, get_session, Attachment
+from .schemas import (
+    ChatRequest, ChatReply, TtsRequest, ErrorEnvelope, ChatMessage,
+    BrainLayer, AttachmentSummary, UploadResponse,
+)
 from .security import inspect_input, sanitize_output, mask_for_log
 from .brain import answer as brain_answer
 from .providers import generate as provider_generate
 from . import tts as tts_mod
+from . import extract as extract_mod
 from .logging_utils import configure as cfg_logging, new_cid, get_cid
 
 cfg_logging()
@@ -31,7 +39,7 @@ async def lifespan(_: FastAPI):
     log.info("shutdown.ok")
 
 
-app = FastAPI(title="Infamous AI", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="COGNEXA AI", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -111,7 +119,8 @@ async def chat(req: ChatRequest, db: OrmSession = Depends(get_session)):
         return text
 
     try:
-        reply_text, layers_used = await brain_answer(req.message, gen)
+        attachments = _fetch_attachments(db, req.attachment_ids or [])
+        reply_text, layers_used = await brain_answer(req.message, gen, attachments=attachments)
     except Exception:
         log.exception("brain.failed")
         reply_text = "I ran into a problem. Please retry."
@@ -142,6 +151,7 @@ async def chat(req: ChatRequest, db: OrmSession = Depends(get_session)):
         message=msg,
         layers_used=[{"name": BrainLayer(l["name"]), "weight": l["weight"]} for l in layers_used],
         degraded=degraded,
+        attachments_used=[a["id"] for a in (attachments or [])] or None,
     )
 
 
@@ -184,4 +194,116 @@ async def tts(req: TtsRequest):
 # ---- Friendly root for sanity checks ---------------------------------------
 @app.get("/")
 def root():
-    return {"service": "infamous-ai", "version": app.version, "docs": "/docs"}
+    return {
+        "service": "cognexa-ai",
+        "version": app.version,
+        "creator": "Bikash Talukder",
+        "docs": "/docs",
+    }
+
+# ---- Document upload + extraction ----------------------------------------
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", tempfile.gettempdir())) / "cognexa_uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))  # 25 MB
+
+
+@app.post("/api/v1/uploads", response_model=UploadResponse)
+async def upload(file: UploadFile = File(...), db: OrmSession = Depends(get_session)):
+    """Accept a PDF or image, extract text (digital + OCR fallback), persist
+    an attachment record, and return an excerpt the UI can preview.
+
+    The LLM is NOT called here — extraction is local. Whether an LLM has the
+    keys configured is decided later in the chat route.
+    """
+    new_cid()
+    filename = (file.filename or "upload").strip() or "upload"
+    head = await file.read(8)
+    await file.seek(0)
+    blob = await file.read()
+    if len(blob) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"file_too_large: max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
+
+    kind = extract_mod.detect_mime(filename, head)
+    if kind == "unknown":
+        raise HTTPException(status_code=415, detail="unsupported_file_type: PDF or image required")
+
+    # Stream to disk in case we want to re-process later.
+    safe_name = f"{uuid4().hex}_{Path(filename).name}"
+    path = UPLOAD_DIR / safe_name
+    path.write_bytes(blob)
+
+    if kind == "pdf":
+        result = extract_mod.extract_pdf(path)
+        mime = "application/pdf"
+    else:
+        result = extract_mod.extract_image(blob, filename)
+        mime = (file.content_type or "image/*").split(";", 1)[0].strip() or "image/*"
+
+    att = Attachment(
+        user_name="friend",
+        filename=filename,
+        mime=mime,
+        size_bytes=len(blob),
+        page_count=result.page_count,
+        engines=",".join(result.engines),
+        had_ocr=result.had_ocr,
+        full_text=result.text[:200_000],   # 200KB hard cap on stored text
+    )
+    db.add(att)
+    db.commit()
+    db.refresh(att)
+
+    summary = AttachmentSummary(
+        id=att.id,
+        filename=att.filename,
+        mime=att.mime,
+        page_count=att.page_count,
+        char_count=len(att.full_text),
+        engines=result.engines,
+        had_ocr=result.had_ocr,
+        warnings=result.warnings,
+        created_at=att.created_at.isoformat() + "Z",
+    )
+    log.info(
+        f"upload.ok name={filename} kind={kind} pages={result.page_count} "
+        f"chars={len(att.full_text)} engines={result.engines} "
+        f"warnings={len(result.warnings)}"
+    )
+
+    # Friendly user-facing message they see in the chat preview.
+    if result.text.strip():
+        user_msg = (
+            f"Got it — **{filename}** "
+            f"({result.page_count} page{'s' if result.page_count != 1 else ''}, "
+            f"{len(att.full_text):,} chars extracted"
+            + (f", OCR used on {sum(1 for p in result.pages if p.method == 'ocr')} page"
+               f"{'s' if sum(1 for p in result.pages if p.method == 'ocr') != 1 else ''}"
+               if result.had_ocr else "")
+            + "). Ask me anything about it."
+        )
+    else:
+        user_msg = (
+            f"I received **{filename}** but couldn't extract any text from it. "
+            + (result.warnings[0] if result.warnings else
+               "Make sure it contains readable content (PDF text layer or non-blank image).")
+        )
+    return UploadResponse(attachment=summary, excerpt=result.excerpt(), message=user_msg)
+
+
+def _fetch_attachments(db: OrmSession, ids: list[str], limit_chars: int = 12_000) -> list[dict]:
+    """Look up attachments and return a list of {filename, excerpt} dicts
+    bounded per-file so the prompt never explodes."""
+    if not ids:
+        return []
+    rows = db.query(Attachment).filter(Attachment.id.in_(ids)).all()
+    out = []
+    by_id = {a.id: a for a in rows}
+    for aid in ids:
+        a = by_id.get(aid)
+        if not a:
+            continue
+        excerpt = a.full_text[:limit_chars]
+        if len(a.full_text) > limit_chars:
+            excerpt += "\n\n[...truncated for length...]"
+        out.append({"filename": a.filename, "excerpt": excerpt, "id": a.id})
+    return out

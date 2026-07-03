@@ -21,8 +21,8 @@ export class RouteErrorBoundary extends Component<Props, State> {
       return (
         <div className="flex min-h-screen items-center justify-center p-6">
           <div className="glass-strong max-w-md p-8 text-center">
-            <h2 className="font-display text-xl text-rose-100">This view ran into a problem</h2>
-            <p className="mt-2 text-sm text-rose-100/70">{this.state.message}</p>
+            <h2 className="font-display text-xl text-theme-strong">This view ran into a problem</h2>
+            <p className="mt-2 text-sm text-theme-muted">{this.state.message}</p>
             <a href="/" className="btn-primary mt-5 inline-block">Back to start</a>
           </div>
         </div>

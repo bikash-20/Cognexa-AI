@@ -30,8 +30,8 @@ export class ErrorBoundary extends Component<Props, State> {
       return this.props.fallback ?? (
         <div className="flex min-h-screen items-center justify-center p-6">
           <div className="glass-strong max-w-md p-8 text-center">
-            <h1 className="font-display text-2xl text-rose-100">Something went wrong</h1>
-            <p className="mt-2 text-sm text-rose-100/70">{this.state.message}</p>
+            <h1 className="font-display text-2xl text-theme-strong">Something went wrong</h1>
+            <p className="mt-2 text-sm text-theme-muted">{this.state.message}</p>
             <button
               type="button"
               className="btn-primary mt-5"

@@ -16,14 +16,17 @@ type Seg =
 
 function tokenize(input: string): Seg[] {
   // Pull out math blocks first so marked doesn't misread them.
+  // Supports both markdown-style delimiters ($..$ / $$..$$) and LaTeX-style (\(..\) / \[..\]).
   const out: Seg[] = [];
-  const mathRe = /\$\$([^$]+?)\$\$|\$([^$]+?)\$/g;
+  const mathRe = /\$\$([^$]+?)\\$\$|\$([^$]+?)\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)/g;
   let last = 0;
   for (const m of input.matchAll(mathRe)) {
     const idx = m.index ?? 0;
     if (idx > last) out.push({ type: 'html', html: input.slice(last, idx) });
-    if (m[1] !== undefined) out.push({ type: 'math', displayMode: true,  tex: m[1] });
-    else                       out.push({ type: 'math', displayMode: false, tex: m[2]! });
+    if      (m[1] !== undefined) out.push({ type: 'math', displayMode: true,  tex: m[1] });
+    else if (m[2] !== undefined) out.push({ type: 'math', displayMode: false, tex: m[2]! });
+    else if (m[3] !== undefined) out.push({ type: 'math', displayMode: true,  tex: m[3] });
+    else                          out.push({ type: 'math', displayMode: false, tex: m[4]! });
     last = idx + m[0].length;
   }
   if (last < input.length) out.push({ type: 'html', html: input.slice(last) });
@@ -80,8 +83,8 @@ export function CodeBlock({ code, lang }: { code: string; lang: string }) {
   }
 
   return (
-    <div className="my-3 overflow-hidden rounded-xl border border-white/15 bg-wine-800/80">
-      <div className="flex items-center justify-between bg-white/5 px-3 py-1.5 text-xs text-rose-100/70">
+    <div className="my-3 overflow-hidden rounded-xl border border-white/15 glass-strong">
+      <div className="flex items-center justify-between bg-white/5 px-3 py-1.5 text-xs text-theme-muted">
         <span>{lang || 'code'}</span>
         <button type="button" onClick={copy} className="rounded px-2 py-0.5 hover:bg-white/10">
           {copied ? 'Copied!' : 'Copy'}

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AnimatedOrb } from '../../shared/ui/AnimatedOrb';
+import { ThemeSwitcher } from '../chat/ThemeSwitcher';
 import { setUserName } from '../../shared/lib/user';
 import { logEvent } from '../../shared/lib/logger';
 
@@ -17,19 +18,24 @@ export function LandingPage() {
 
   return (
     <main className="relative flex min-h-screen flex-col items-center justify-center px-6 py-10">
+      <div className="absolute right-4 top-4"><ThemeSwitcher /></div>
+
       <div className="w-full max-w-md text-center">
         <AnimatedOrb size={240} active />
 
-        <h1 className="mt-8 font-display text-4xl tracking-wide text-rose-100 sm:text-5xl">
-          Infamous <span className="text-rose-400">AI</span>
+        <h1 className="mt-8 font-display text-4xl tracking-wide text-theme-strong sm:text-5xl">
+          COGNEXA <span className="text-theme-soft">AI</span>
         </h1>
-        <p className="mt-2 text-rose-100/70">A glass-morphic assistant with memory.</p>
+        <p className="mt-2 text-sm uppercase tracking-widest text-theme-muted">
+          by Bikash Talukder · Founder &amp; CEO
+        </p>
+        <p className="mt-3 text-theme-soft">A glass-morphic assistant with memory.</p>
 
         <form
           className="glass-strong mx-auto mt-8 flex flex-col gap-3 p-6 text-left"
           onSubmit={(e) => { e.preventDefault(); start('chat'); }}
         >
-          <label htmlFor="user-name" className="text-sm uppercase tracking-widest text-rose-200/80">
+          <label htmlFor="user-name" className="text-sm uppercase tracking-widest text-theme-soft">
             What should I call you?
           </label>
           <input
@@ -49,7 +55,7 @@ export function LandingPage() {
               Voice mode
             </button>
           </div>
-          <p className="text-center text-xs text-rose-100/50">
+          <p className="text-center text-xs text-theme-dim">
             Your name is stored locally. No account needed.
           </p>
         </form>

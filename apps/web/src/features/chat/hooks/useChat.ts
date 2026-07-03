@@ -5,7 +5,7 @@ import {  ChatReplySchema, type ChatMessage } from '../../../shared/types/contra
 import { z } from 'zod';
 import { logWarn } from '../../../shared/lib/logger';
 
-type SendInput = { history: ChatMessage[]; userName: string; sessionId?: string };
+type SendInput = { history: ChatMessage[]; userName: string; sessionId?: string; attachmentIds?: string[] };
 
 const ReplyEnvelope = z.object({ reply: ChatReplySchema });
 
@@ -25,17 +25,25 @@ export function useChat() {
   const inFlight = useRef<AbortController | null>(null);
 
   const send = useMutation({
-    mutationFn: async ({ history, userName, sessionId }: SendInput) => {
+    mutationFn: async ({ history, userName, sessionId, attachmentIds }: SendInput) => {
       // Cancel any in-flight request before starting a new one.
       inFlight.current?.abort();
       const ac = new AbortController();
       inFlight.current = ac;
 
+      const body: Record<string, unknown> = {
+        user_name: userName,
+        message: history[history.length - 1]?.content ?? '',
+        history
+      };
+      if (sessionId) body.session_id = sessionId;
+      if (attachmentIds && attachmentIds.length > 0) body.attachment_ids = attachmentIds;
+
       const res = await apiFetch('/api/v1/chat', {
         method: 'POST',
         schema: ReplyEnvelope,
         signal: ac.signal,
-        json: { user_name: userName, message: history[history.length - 1]?.content ?? '', history, session_id: sessionId }
+        json: body
       });
       return res;
     },
@@ -44,12 +52,18 @@ export function useChat() {
   });
 
   // We wrap send to drive optimistic UI + status transitions explicitly.
-  const submit = useCallback(async (userText: string, userName: string, sessionId?: string) => {
+  const submit = useCallback(async (
+    messageId: string,
+    userText: string,
+    userName: string,
+    sessionId?: string,
+    attachmentIds: string[] = []
+  ) => {
     setStatus('loading');
     setError(null);
 
     const userMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: messageId || crypto.randomUUID(),
       role: 'user',
       content: userText,
       created_at: new Date().toISOString()
@@ -63,7 +77,12 @@ export function useChat() {
     };
     setMessages((prev) => [...prev, userMsg, placeholder]);
 
-    const next = await send.mutateAsync({ history: [...messages, userMsg], userName, ...(sessionId ? { sessionId } : {}) });
+    const next = await send.mutateAsync({
+      history: [...messages, userMsg],
+      userName,
+      ...(sessionId ? { sessionId } : {}),
+      ...(attachmentIds.length > 0 ? { attachmentIds } : {})
+    });
     inFlight.current = null;
 
     if (!next.ok) {
@@ -75,14 +94,17 @@ export function useChat() {
       return;
     }
 
-    setMessages((prev) => prev.map((m) => (m.id === placeholder.id ? next.ok ? next.data.reply.message : m : m)));
-     setDegraded(Boolean(next.ok && next.data.reply.degraded));
-     setLayersUsed(next.ok && next.data.reply.layers_used || []);
+    setMessages((prev) => prev.map((m) => (m.id === placeholder.id && next.ok ? next.data.reply.message : m)));
+    if (next.ok) {
+      setDegraded(Boolean(next.data.reply.degraded));
+      setLayersUsed(next.data.reply.layers_used || []);
+    }
     setStatus('success');
     qc.invalidateQueries({ queryKey: ['history'] });
   }, [messages, send, qc]);
+
   return { messages, status, error, degraded, layersUsed, submit, setMessages };
-  
+
 }
 
 function describe(e: { kind: string; message: string }): string {

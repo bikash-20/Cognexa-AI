@@ -22,6 +22,10 @@ class BrainLayer(str, Enum):
     COMPLEX = "complex"
     REASONING = "reasoning"
     SPECIALIST = "specialist"
+    DOCUMENT = "document"
+    MATH = "math"
+    CODE = "code"
+    SCIENCE = "science"
 
 
 class ChatMessage(Strict):
@@ -38,6 +42,7 @@ class ChatRequest(Strict):
     message: str = Field(min_length=1, max_length=4000)
     history: list[ChatMessage] = Field(default_factory=list, max_length=40)
     session_id: UUID | None = None
+    attachment_ids: list[str] = Field(default_factory=list, max_length=8)
 
 
 class LayerUsage(Strict):
@@ -50,6 +55,25 @@ class ChatReply(Strict):
     message: ChatMessage
     layers_used: list[LayerUsage]
     degraded: bool | None = False
+    attachments_used: list[str] | None = None
+
+
+class AttachmentSummary(Strict):
+    id: str
+    filename: str
+    mime: str
+    page_count: int
+    char_count: int
+    engines: list[str]
+    had_ocr: bool
+    warnings: list[str]
+    created_at: str
+
+
+class UploadResponse(Strict):
+    attachment: AttachmentSummary
+    excerpt: str
+    message: str
 
 
 class TtsRequest(Strict):

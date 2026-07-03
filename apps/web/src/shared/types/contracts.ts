@@ -22,15 +22,30 @@ export const ChatRequestSchema = z.object({
   session_id: z.string().uuid().optional(),
   user_name: z.string().min(1).max(60),
   message: z.string().min(1).max(4000),
-  history: z.array(ChatMessageSchema).max(40)
+  history: z.array(ChatMessageSchema).max(40),
+  attachment_ids: z.array(z.string().min(1)).max(8).optional()
 });
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
+
+export const AttachmentSummarySchema = z.object({
+  id: z.string(),
+  filename: z.string(),
+  mime: z.string(),
+  page_count: z.number().int().nonnegative(),
+  char_count: z.number().int().nonnegative(),
+  engines: z.array(z.string()),
+  had_ocr: z.boolean(),
+  warnings: z.array(z.string()),
+  created_at: z.string()
+});
+export type AttachmentSummary = z.infer<typeof AttachmentSummarySchema>;
 
 export const ChatReplySchema = z.object({
   session_id: z.string().uuid(),
   message: ChatMessageSchema,
   layers_used: z.array(z.object({ name: BrainLayer, weight: z.number().min(0).max(1) })),
-  degraded: z.boolean().optional()
+  degraded: z.boolean().optional(),
+  attachments_used: z.array(z.string()).optional()
 });
 export type ChatReply = z.infer<typeof ChatReplySchema>;
 

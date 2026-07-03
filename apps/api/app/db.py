@@ -34,6 +34,23 @@ class Message(Base):
     session: Mapped["ChatSession"] = relationship(back_populates="messages")
 
 
+class Attachment(Base):
+    __tablename__ = "attachments"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_name: Mapped[str] = mapped_column(String(60), index=True, default="friend")
+    session_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("sessions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    filename: Mapped[str] = mapped_column(String(255))
+    mime: Mapped[str] = mapped_column(String(64))
+    size_bytes: Mapped[int] = mapped_column(default=0)
+    page_count: Mapped[int] = mapped_column(default=0)
+    engines: Mapped[str] = mapped_column(String(120), default="")
+    had_ocr: Mapped[bool] = mapped_column(default=False)
+    full_text: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 # Backwards-compat alias (older code referenced `Session`).
 Session = ChatSession
 

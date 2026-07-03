@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AnimatedOrb } from '../../shared/ui/AnimatedOrb';
+import { ThemeSwitcher } from '../chat/ThemeSwitcher';
 import { useUserName } from '../../shared/lib/user';
 import { apiFetch } from '../../shared/lib/api';
 import { z } from 'zod';
@@ -120,44 +121,47 @@ export function VoicePage() {
     <main className="flex h-[100dvh] flex-col">
       <header className="glass-strong flex items-center justify-between px-4 py-3 sm:px-6">
         <Link to="/chat" className="btn-ghost text-sm">Back to chat</Link>
-        <span className="font-display text-rose-100">Voice mode</span>
-        <span className="text-xs text-rose-100/50">{name ?? ''}</span>
+        <span className="font-display text-theme-strong">Voice mode</span>
+        <div className="flex items-center gap-2">
+          <span className="hidden text-xs text-theme-muted sm:inline">{name ?? ''}</span>
+          <ThemeSwitcher />
+        </div>
       </header>
 
       <div ref={scrollRef} className="relative flex flex-1 flex-col items-center justify-start overflow-y-auto px-4 pb-6 pt-10">
         <AnimatedOrb size={260} active={listening || replying} />
         <div className="mt-10 w-full max-w-md flex-1">
           <div className="glass-strong space-y-2 p-4">
-            {turns.length === 0 && <p className="text-center text-sm text-rose-100/60">Tap the mic and start talking.</p>}
+            {turns.length === 0 && <p className="text-center text-sm text-theme-muted">Tap the mic and start talking.</p>}
             {turns.map((t) => (
               <div
                 key={t.id}
                 className={
                   'rounded-xl px-3 py-2 text-sm ' +
-                  (t.role === 'user' ? 'bg-rose-500/15 text-rose-50' : 'bg-white/5 text-rose-100')
+                  (t.role === 'user' ? 'bg-white/10 text-theme-strong' : 'glass text-theme-main')
                 }
               >
-                <div className="text-[10px] uppercase tracking-widest text-rose-100/50">
-                  {t.role === 'user' ? name ?? 'you' : 'infamous'}
+                <div className="text-[10px] uppercase tracking-widest text-theme-muted">
+                  {t.role === 'user' ? name ?? 'you' : 'cognexa'}
                 </div>
                 <div className="mt-1 leading-relaxed">{t.text || (t.role === 'user' ? '…' : '')}</div>
               </div>
             ))}
             {liveText && turns[turns.length - 1]?.text === '' && (
-              <div className="rounded-xl bg-rose-500/15 px-3 py-2 text-sm text-rose-50">{liveText}</div>
+              <div className="rounded-xl bg-white/10 px-3 py-2 text-sm text-theme-strong">{liveText}</div>
             )}
             {replying && (
-              <div className="rounded-xl bg-white/5 px-3 py-2 text-sm text-rose-100">
-                <span className="inline-block h-2 w-2 animate-orb-pulse rounded-full bg-rose-300" />
+              <div className="glass rounded-xl px-3 py-2 text-sm text-theme-main">
+                <span className="inline-block h-2 w-2 animate-orb-pulse rounded-full bg-[color:var(--primary-glow-1)]" />
                 <span className="ml-2">listening… thinking…</span>
               </div>
             )}
           </div>
-          {error && <div role="alert" className="mt-3 text-center text-xs text-rose-200">{error}</div>}
+          {error && <div role="alert" className="mt-3 text-center text-xs text-theme-soft">{error}</div>}
         </div>
       </div>
 
-      <div className="flex items-center justify-center gap-3 border-t border-white/10 bg-wine-900/40 p-4 backdrop-blur-xl">
+      <div className="flex items-center justify-center gap-3 border-t border-white/10 bg-black/30 p-4 backdrop-blur-xl">
         {!listening
           ? <button type="button" onClick={start} className="btn-primary">Start talking</button>
           : <button type="button" onClick={stop} className="btn-ghost">Stop</button>}

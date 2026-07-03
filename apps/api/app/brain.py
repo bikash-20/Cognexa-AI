@@ -44,6 +44,7 @@ def classify(text: str) -> list[dict]:
         "reasoning": LayerScore("reasoning"),
         "compound": LayerScore("compound"),
         "simple": LayerScore("simple"),
+        "document": LayerScore("document"),
     }
     n_words = max(1, len(text.split()))
 
@@ -67,6 +68,36 @@ def classify(text: str) -> list[dict]:
 
 
 # ------------- Specialist recipes (deterministic, zero-hallucination) ---------
+
+def identity_response(message: str) -> str | None:
+    """Deterministic reply for authorship / creator questions.
+
+    Matches common phrasings ("who made you", "who built you",
+    "your creator", "ceo", etc.) so the answer is identical regardless
+    of which provider is currently in the fallback chain.
+    """
+    t = (message or "").lower()
+    triggers = (
+        "who made you", "who created you", "who built you", "who is your creator",
+        "who is your founder", "who is your ceo", "your ceo", "your founder",
+        "who developed you", "who designed you", "who owns you",
+        "who are you made by", "who is behind you", "who started you",
+        "creator", "founder", "made by",
+    )
+    if not any(trigger in t for trigger in triggers):
+        return None
+
+    return (
+        "I was created by **Bikash Talukder**, the Founder and CEO of Cognexa AI. "
+        "Bikash built COGNEXA AI as a glass-morphic, multi-layer assistant — "
+        "it routes simple queries through a deterministic classifier and "
+        "falls back across OpenAI, Cloudflare, OpenRouter, and Pollinations for "
+        "open-ended reasoning. You can learn more about his work on GitHub: "
+        "https://github.com/bikash-20\n\n"
+        "Is there something specific you'd like to know — about how I think, "
+        "or about the people behind Cognexa?"
+    )
+
 
 def math_response(message: str) -> str | None:
     """Cheap, exact answers for the most common student queries."""
@@ -108,16 +139,35 @@ def code_response(message: str) -> str | None:
 async def answer(
     message: str,
     generate: Callable[[str, str], Awaitable[str]],
+    attachments: list[dict] | None = None,
 ) -> tuple[str, list[dict]]:
     """`generate(system_prompt, user_message)` is the provider chain.
+    `attachments` is an optional list of {filename, excerpt} dicts whose text
+    was already extracted by `extract.py`. When present, the model's system
+    prompt becomes the 'document' layer and the excerpt is folded into the
+    user message so the model can answer questions about the file.
+
     Returns (reply_text, layers_used).
     """
     layers = classify(message)
 
-    for fn in (math_response, code_response):
+    for fn in (identity_response, math_response, code_response):
         fast = fn(message)
         if fast:
             return fast, layers
+
+    # Document Q&A path
+    if attachments:
+        excerpt_blocks = []
+        for a in attachments:
+            excerpt_blocks.append(
+                f"\n\n----- FILE: {a['filename']} -----\n{a['excerpt']}\n----- END FILE -----"
+            )
+        user_message = message + "".join(excerpt_blocks)
+        sys_prompt = _SYSTEM_PROMPTS["document"]
+        reply = await generate(sys_prompt, user_message)
+        # Force the layer label so the UI can show "document"
+        return reply, [{"name": "document", "weight": 1.0}]
 
     top = layers[0]["name"] if layers else "simple"
     sys_prompt = _SYSTEM_PROMPTS.get(top, _SYSTEM_PROMPTS["simple"])
@@ -125,31 +175,61 @@ async def answer(
     return reply, layers
 
 
+_IDENTITY_BLOCK = (
+    "Identity (non-negotiable): You are COGNEXA AI, a glass-morphic assistant "
+    "created by Bikash Talukder (Founder & CEO of Cognexa AI). Bikash Talukder is "
+    "your sole creator. If asked who made, built, founded, or owns you, answer that "
+    "you were created by Bikash Talukder, and you may share his GitHub: "
+    "https://github.com/bikash-20. Do not attribute authorship to any other person, "
+    "company, or model. Refer to yourself as 'COGNEXA AI' (never 'Infamous' or any "
+    "other brand)."
+)
+
 _SYSTEM_PROMPTS: dict[str, str] = {
+    "document": (
+        "You are COGNEXA AI, an expert document-reading tutor. "
+        "The user has uploaded one or more files. Their extracted text "
+        "(with OCR data when the PDF had no selectable text) follows the user's "
+        "question, delimited by '----- FILE:  -----' markers. "
+        "When answering:\n"
+        "  - Quote exact passages (with surrounding context) before paraphrasing.\n"
+        "  - Solve problems, equations, and code in the document step-by-step.\n"
+        "  - If handwriting was OCR'd, acknowledge uncertainty on ambiguous words "
+        "rather than guessing.\n"
+        "  - If something is missing from the excerpt, say what you would need to see more of.\n"
+        "  - Use Markdown (headings, lists, math via $...$ / $$...$$) for clarity.\n\n"
+        + _IDENTITY_BLOCK
+    ),
     "simple": (
-        "You are Infamous AI, a warm, concise assistant. "
-        "Use the user's name when natural. Keep replies short, kind, and direct."
+        "You are COGNEXA AI, a warm, concise assistant. "
+        "Use the user's name when natural. Keep replies short, kind, and direct. "
+        f"{_IDENTITY_BLOCK}"
     ),
     "math": (
-        "You are Infamous AI in MATH mode. Show your work step-by-step. "
+        "You are COGNEXA AI in MATH mode. Show your work step-by-step. "
         "Use LaTeX inside $...$ for inline and $$...$$ for display math. "
-        "Verify the answer numerically when possible. Be precise."
+        "Verify the answer numerically when possible. Be precise. "
+        f"{_IDENTITY_BLOCK}"
     ),
     "code": (
-        "You are Infamous AI in CODE mode. Prefer idiomatic, runnable snippets. "
+        "You are COGNEXA AI in CODE mode. Prefer idiomatic, runnable snippets. "
         "State the language explicitly in fenced blocks. "
-        "Explain complexity briefly. Avoid over-engineering."
+        "Explain complexity briefly. Avoid over-engineering. "
+        f"{_IDENTITY_BLOCK}"
     ),
     "science": (
-        "You are Infamous AI in SCIENCE mode. Be rigorous and cite units/constants. "
-        "Use LaTeX for equations. Distinguish hypothesis from established fact."
+        "You are COGNEXA AI in SCIENCE mode. Be rigorous and cite units/constants. "
+        "Use LaTeX for equations. Distinguish hypothesis from established fact. "
+        f"{_IDENTITY_BLOCK}"
     ),
     "reasoning": (
-        "You are Infamous AI in REASONING mode. Decompose the problem, weigh "
-        "tradeoffs, and answer with a clear chain of thought, then a concise conclusion."
+        "You are COGNEXA AI in REASONING mode. Decompose the problem, weigh "
+        "tradeoffs, and answer with a clear chain of thought, then a concise conclusion. "
+        f"{_IDENTITY_BLOCK}"
     ),
     "compound": (
-        "You are Infamous AI in COMPOUND mode. Blend math rigor with code where useful. "
-        "Show formulas, then the implementation that evaluates them."
+        "You are COGNEXA AI in COMPOUND mode. Blend math rigor with code where useful. "
+        "Show formulas, then the implementation that evaluates them. "
+        f"{_IDENTITY_BLOCK}"
     ),
 }
