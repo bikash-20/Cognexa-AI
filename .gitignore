@@ -40,3 +40,5 @@ coverage/
 
 # OS
 Thumbs.db.puku/
+__pycache__/
+*.pyc
