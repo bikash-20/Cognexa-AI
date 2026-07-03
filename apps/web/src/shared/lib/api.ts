@@ -106,6 +106,141 @@ function isRetryable(status: number): boolean {
   return status === 429 || (status >= 500 && status < 600);
 }
 
+
+/* ---------- Streaming chat (Server-Sent Events) ---------- */
+
+export type StreamEvent =
+  | { type: 'session'; session_id: string }
+  | { type: 'chunk'; delta: string }
+  | { type: 'done'; message: unknown; layers_used: unknown; degraded?: boolean; provider?: string; attachments_used?: string[] | null }
+  | { type: 'error'; detail: string };
+
+export interface StreamChatCallbacks {
+  onSession?: (sessionId: string) => void;
+  onChunk: (delta: string) => void;
+  onDone: (meta: { message: unknown; layers_used: unknown; degraded?: boolean; provider?: string; attachments_used?: string[] | null }) => void;
+  onError?: (detail: string) => void;
+}
+
+export interface StreamChatHandle {
+  abort: () => void;
+}
+
+/**
+ * Opens a streaming POST to /api/v1/chat/stream and routes SSE events to the
+ * supplied callbacks. The server emits four event names:
+ *   - session  → session id created/confirmed on the server
+ *   - chunk    → text delta (word groups, ~3 words each, ~30 ms apart)
+ *   - done     → final metadata (full message, layers, provider, attachments)
+ *   - error    → unrecoverable failure mid-stream (caller should still try fallback)
+ *
+ * Cancellation: caller invokes handle.abort() (or aborts the outer signal).
+ */
+export function streamChat(
+  body: unknown,
+  callbacks: StreamChatCallbacks,
+  opts: { signal?: AbortSignal } = {}
+): StreamChatHandle {
+  const url = `${import.meta.env.VITE_API_BASE}/api/v1/chat/stream`;
+  const ac = new AbortController();
+  const merge = mergeSignals([opts.signal, ac.signal]);
+
+  void (async () => {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+        body: JSON.stringify(body),
+        signal: merge
+      });
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') return;
+      callbacks.onError?.((err as Error).message || 'network');
+      return;
+    }
+
+    if (!res.ok || !res.body) {
+      const detail = await safeText(res).catch(() => res.statusText);
+      callbacks.onError?.(detail || `http ${res.status}`);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE events are separated by a blank line. Process complete events.
+        let idx: number;
+        // eslint-disable-next-line no-cond-assign
+        while ((idx = buffer.indexOf('\n\n')) !== -1) {
+          const rawEvent = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          const parsed = parseSseEvent(rawEvent);
+          if (!parsed) continue;
+          dispatchStreamEvent(parsed, callbacks);
+          if (ac.signal.aborted) return;
+        }
+      }
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') return;
+      callbacks.onError?.((err as Error).message || 'stream interrupted');
+    }
+  })();
+
+  return { abort: () => ac.abort() };
+}
+
+function parseSseEvent(raw: string): { event: string; data: unknown } | null {
+  let event = 'message';
+  let data = '';
+  for (const line of raw.split('\n')) {
+    if (!line) continue;
+    if (line.startsWith('event:')) {
+      event = line.slice(6).trim();
+    } else if (line.startsWith('data:')) {
+      data += line.slice(5).trim();
+    }
+  }
+  if (!data) return null;
+  try {
+    return { event, data: JSON.parse(data) };
+  } catch {
+    return null;
+  }
+}
+
+function dispatchStreamEvent(parsed: { event: string; data: unknown }, cb: StreamChatCallbacks): void {
+  const payload = parsed.data as Record<string, unknown> | null;
+  if (!payload) return;
+  switch (parsed.event) {
+    case 'session':
+      cb.onSession?.(String(payload.session_id ?? ''));
+      break;
+    case 'chunk':
+      if (typeof payload.delta === 'string') cb.onChunk(payload.delta);
+      break;
+    case 'done':
+      cb.onDone({
+        message: payload.message,
+        layers_used: payload.layers_used,
+        degraded: payload.degraded as boolean | undefined,
+        provider: payload.provider as string | undefined,
+        attachments_used: payload.attachments_used as string[] | null | undefined
+      });
+      break;
+    case 'error':
+      cb.onError?.(String(payload.detail ?? 'stream error'));
+      break;
+  }
+}
+
 async function safeText(res: Response): Promise<string> {
   try { return (await res.text()).slice(0, 400); } catch { return res.statusText; }
 }

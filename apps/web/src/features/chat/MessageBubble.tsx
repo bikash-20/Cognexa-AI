@@ -5,7 +5,8 @@ type BubbleAttachment = { filename: string; previewUrl?: string };
 
 export function MessageBubble({
   message,
-  attachments
+  attachments,
+  streaming
 }: {
   message: ChatMessage;
   /**
@@ -14,6 +15,8 @@ export function MessageBubble({
    * ChatWindow threads in from optimistic state.
    */
   attachments?: BubbleAttachment[];
+  /** When true, render a blinking caret at the end of partial content. */
+  streaming?: boolean;
 }) {
   const isUser = message.role === 'user';
   const hasAttachments = isUser && attachments && attachments.length > 0;
@@ -54,9 +57,19 @@ export function MessageBubble({
             ))}
           </div>
         )}
-        {message.content
-          ? <Markdown source={message.content} />
-          : <span className="inline-block h-3 w-24 animate-pulse rounded bg-white/20" />}
+        {message.content ? (
+          <>
+            <Markdown source={message.content} />
+            {streaming && (
+              <span
+                aria-hidden="true"
+                className="ml-0.5 inline-block h-4 w-[2px] -mb-0.5 animate-cursor-blink align-text-bottom bg-[color:var(--accent-from)]"
+              />
+            )}
+          </>
+        ) : streaming ? (
+          <span className="inline-block h-3 w-24 animate-pulse rounded bg-white/20" />
+        ) : null}
       </div>
     </article>
   );

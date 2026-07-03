@@ -1,55 +1,56 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useRef, useState } from 'react';
-import { apiFetch } from '../../../shared/lib/api';
+import { apiFetch, streamChat } from '../../../shared/lib/api';
 import {  ChatReplySchema, type ChatMessage } from '../../../shared/types/contracts';
-
 import { logWarn } from '../../../shared/lib/logger';
 
-type SendInput = { history: ChatMessage[]; userName: string; sessionId?: string; attachmentIds?: string[] };
-
 const ReplyEnvelope = ChatReplySchema;
+
+/** Coalesces rapid chunk updates into one render per animation frame. */
+function makeStreamFlusher(
+  placeholderId: string,
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>
+): { push: (delta: string) => void; finalize: (full: string) => void; abort: () => void } {
+  let pending = '';
+  let raf = 0;
+  const flush = () => {
+    raf = 0;
+    if (!pending) return;
+    const chunk = pending;
+    pending = '';
+    setMessages((prev) => prev.map((m) => (m.id === placeholderId ? { ...m, content: m.content + chunk } : m)));
+  };
+  return {
+    push(delta: string) {
+      pending += delta;
+      if (!raf) raf = requestAnimationFrame(flush);
+    },
+    finalize(full: string) {
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      setMessages((prev) => prev.map((m) => (m.id === placeholderId ? { ...m, content: full } : m)));
+    },
+    abort() {
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    }
+  };
+}
 
 /**
  * Owns: server state for the chat session.
  *   - Aborts in-flight requests when a newer one is fired.
  *   - Renders 4 explicit states: idle | loading | success | error.
  *   - Optimistically appends the user message and the assistant placeholder.
+ *   - Streams the assistant reply token-by-token via SSE.
  */
 export function useChat() {
   const qc = useQueryClient();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [degraded, setDegraded] = useState(false);
   const [layersUsed, setLayersUsed] = useState<{ name: string; weight: number }[]>([]);
   const inFlight = useRef<AbortController | null>(null);
-
-  const send = useMutation({
-    mutationFn: async ({ history, userName, sessionId, attachmentIds }: SendInput) => {
-      // Cancel any in-flight request before starting a new one.
-      inFlight.current?.abort();
-      const ac = new AbortController();
-      inFlight.current = ac;
-
-      const body: Record<string, unknown> = {
-        user_name: userName,
-        message: history[history.length - 1]?.content ?? '',
-        history
-      };
-      if (sessionId) body.session_id = sessionId;
-      if (attachmentIds && attachmentIds.length > 0) body.attachment_ids = attachmentIds;
-
-      const res = await apiFetch('/api/v1/chat', {
-        method: 'POST',
-        schema: ReplyEnvelope,
-        signal: ac.signal,
-        json: body
-      });
-      return res;
-    },
-    onSuccess: (res, vars) => { void res; void vars; },
-    onError: () => { /* muted — handled via status below */ }
-  });
 
   // We wrap send to drive optimistic UI + status transitions explicitly.
   const submit = useCallback(async (
@@ -61,6 +62,7 @@ export function useChat() {
   ) => {
     setStatus('loading');
     setError(null);
+    setStreaming(true);
 
     const userMsg: ChatMessage = {
       id: messageId || crypto.randomUUID(),
@@ -77,34 +79,106 @@ export function useChat() {
     };
     setMessages((prev) => [...prev, userMsg, placeholder]);
 
-    const next = await send.mutateAsync({
-      history: [...messages, userMsg],
-      userName,
-      ...(sessionId ? { sessionId } : {}),
-      ...(attachmentIds.length > 0 ? { attachmentIds } : {})
+    const body: Record<string, unknown> = {
+      user_name: userName,
+      message: userText,
+      history: [...messages, userMsg]
+    };
+    if (sessionId) body.session_id = sessionId;
+    if (attachmentIds.length > 0) body.attachment_ids = attachmentIds;
+
+    // Cancel any prior in-flight stream before opening a new one.
+    inFlight.current?.abort();
+    const ac = new AbortController();
+    inFlight.current = ac;
+
+    const flusher = makeStreamFlusher(placeholder.id, setMessages);
+    let assembled = '';
+    let streamFailed = false;
+    let streamErrDetail = '';
+    let streamDone = false;
+
+    const donePromise = new Promise<void>((resolve) => {
+      const finish = () => { streamDone = true; resolve(); };
+      const handle = streamChat(
+        body,
+        {
+          onSession: () => { /* could cache sessionId here if needed */ },
+          onChunk: (delta) => {
+            assembled += delta;
+            flusher.push(delta);
+          },
+          onDone: (meta) => {
+            flusher.finalize(assembled);
+            if (meta.message) {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === placeholder.id
+                    ? ({ ...(meta.message as ChatMessage), content: assembled || (meta.message as ChatMessage).content } as ChatMessage)
+                    : m
+                )
+              );
+            }
+            setDegraded(Boolean(meta.degraded));
+            setLayersUsed(
+              Array.isArray(meta.layers_used)
+                ? (meta.layers_used as { name: string; weight: number }[])
+                : []
+            );
+            setStatus('success');
+            setStreaming(false);
+            qc.invalidateQueries({ queryKey: ['history'] });
+            finish();
+          },
+          onError: (detail) => {
+            streamFailed = true;
+            streamErrDetail = detail;
+            finish();
+          }
+        },
+        { signal: ac.signal }
+      );
+      // If ac is aborted externally, surface that as a failure too.
+      ac.signal.addEventListener('abort', () => {
+        handle.abort();
+        flusher.abort();
+        if (!streamDone) {
+          streamFailed = true;
+          streamErrDetail = 'canceled';
+          finish();
+        }
+      }, { once: true });
     });
+
+    await donePromise;
     inFlight.current = null;
+    flusher.abort();
 
-    if (!next.ok) {
-      // Roll back placeholder on any failure.
+    if (streamFailed) {
       setMessages((prev) => prev.filter((m) => m.id !== placeholder.id));
-      setStatus('error');
-      setError(describe(next.error));
-      logWarn('chat.error', { kind: next.error.kind });
-      return;
+      const fallback = await apiFetch('/api/v1/chat', {
+        method: 'POST',
+        schema: ReplyEnvelope,
+        signal: ac.signal,
+        json: body
+      });
+      if (!fallback.ok) {
+        setStatus('error');
+        setError(streamErrDetail || describe(fallback.error));
+        setStreaming(false);
+        logWarn('chat.error', { kind: fallback.error.kind });
+        return;
+      }
+      setMessages((prev) => [...prev, fallback.data.message]);
+      setDegraded(Boolean(fallback.data.degraded));
+      setLayersUsed(fallback.data.layers_used || []);
+      setStatus('success');
+      setStreaming(false);
+      qc.invalidateQueries({ queryKey: ['history'] });
     }
+  }, [messages, qc]);
 
-    setMessages((prev) => prev.map((m) => (m.id === placeholder.id && next.ok ? next.data.message : m)));
-    if (next.ok) {
-      setDegraded(Boolean(next.data.degraded));
-      setLayersUsed(next.data.layers_used || []);
-    }
-    setStatus('success');
-    qc.invalidateQueries({ queryKey: ['history'] });
-  }, [messages, send, qc]);
-
-  return { messages, status, error, degraded, layersUsed, submit, setMessages };
-
+  return { messages, status, error, degraded, layersUsed, submit, setMessages, streaming };
 }
 
 function describe(e: { kind: string; message: string }): string {

@@ -12,7 +12,7 @@ type BubbleAttachment = { filename: string; previewUrl?: string };
 
 export function ChatWindow() {
   const { name } = useUserName();
-  const { messages, status, error, degraded, submit } = useChat();
+  const { messages, status, error, degraded, streaming, submit } = useChat();
   const scrollRef = useRef<HTMLDivElement>(null);
   // message_id -> UI-only attachment chips to render above the bubble content.
   const [uiAttachments, setUiAttachments] = useState<Record<string, BubbleAttachment[]>>({});
@@ -76,9 +76,10 @@ export function ChatWindow() {
               key={m.id}
               message={m}
               attachments={m.role === 'user' ? uiAttachments[m.id] : undefined}
+              streaming={streaming && m.role === 'assistant' && m === messages[messages.length - 1]}
             />
           ))}
-          {status === 'loading' && (
+          {status === 'loading' && !streaming && (
             <div className="glass flex w-fit items-center gap-1.5 self-start rounded-full px-3 py-2" aria-label="Thinking">
               <span className="h-1.5 w-1.5 animate-orb-pulse rounded-full bg-[color:var(--primary-glow-1)]" />
               <span className="h-1.5 w-1.5 animate-orb-pulse rounded-full bg-[color:var(--primary-glow-1)] [animation-delay:120ms]" />
@@ -88,7 +89,7 @@ export function ChatWindow() {
         </div>
       </div>
 
-      <ChatInput onSend={(text, ids, meta) => send(text, ids, meta)} disabled={status === 'loading'} />
+      <ChatInput onSend={(text, ids, meta) => send(text, ids, meta)} disabled={streaming} />
     </div>
   );
 }

@@ -1,5 +1,7 @@
 """FastAPI entry. Wires routers, exception envelope, health checks, and logging."""
 from __future__ import annotations
+import asyncio
+import json
 import logging
 import os
 import tempfile
@@ -9,7 +11,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy.orm import Session as OrmSession
 
 from .config import get_settings
@@ -161,6 +163,149 @@ async def chat(req: ChatRequest, db: OrmSession = Depends(get_session)):
         degraded=degraded,
         provider=provider_used,
         attachments_used=[a["id"] for a in (attachments or [])] or None,
+    )
+
+
+# ---- SSE streaming chat ----------------------------------------------------
+def _sse(event: str, **payload) -> str:
+    """Format one SSE event.  Event name drives the client switch."""
+    return f"event: {event}\ndata: {json.dumps(payload, default=str)}\n\n"
+
+
+async def _token_chunks(text: str, chunk_words: int = 3, delay_s: float = 0.03):
+    """Fake-stream a finished string in small word groups.
+
+    Pollinations doesn't expose a streaming endpoint, so we chunk the final
+    reply to give the same UX as native SSE.  Specialist recipes come out
+    whole (single chunk) because they're already short and deterministic.
+    """
+    if not text:
+        yield ""
+        return
+    # Specialist / short answer — yield once for snappiness.
+    if len(text) < 80 or "\n" not in text and " " not in text:
+        yield text
+        return
+    words = text.split(" ")
+    buf: list[str] = []
+    for w in words:
+        buf.append(w)
+        if len(buf) >= chunk_words:
+            yield " ".join(buf) + " "
+            buf = []
+            if delay_s > 0:
+                await asyncio.sleep(delay_s)
+    if buf:
+        yield " ".join(buf)
+
+
+@app.post("/api/v1/chat/stream")
+async def chat_stream(req: ChatRequest, request: Request, db: OrmSession = Depends(get_session)):
+    """Server-Sent Events version of /api/v1/chat.
+
+    Event sequence:
+      event: session   {session_id}
+      event: chunk     {delta}                   (repeated)
+      event: done      {message, layers_used, degraded, provider, attachments_used}
+      event: error     {detail}                  (only on hard failure)
+    """
+    new_cid()
+    ok, why = inspect_input(req.message)
+    if not ok:
+        log.warning(f"chat_stream.rejected reason={why}")
+        raise HTTPException(status_code=400, detail="Input rejected by safety layer.")
+
+    # Session + user message persistence (mirrors /chat).
+    if req.session_id:
+        session_id = str(req.session_id)
+        from .db import Session as DSession
+        sess = db.get(DSession, session_id)
+    else:
+        from .db import Session as DSession
+        sess = DSession(user_name=req.user_name,
+                        title=(req.message[:48] + "…") if len(req.message) > 48 else req.message)
+        db.add(sess)
+        db.flush()
+        session_id = sess.id
+
+    from .db import Message as DMessage
+    db.add(DMessage(session_id=session_id, role="user", content=req.message))
+    db.commit()
+
+    provider_used = "unknown"
+    layers_used: list[dict] = []
+    safe_text = ""
+    degraded = False
+
+    async def event_gen():
+        nonlocal provider_used, layers_used, safe_text, degraded
+        try:
+            yield _sse("session", session_id=session_id)
+
+            async def gen(sys: str, user: str) -> str:
+                nonlocal provider_used
+                text, provider_used = await provider_generate(
+                    sys, user, timeout=settings.chat_timeout_s
+                )
+                log.info(f"provider.used name={provider_used} len={len(text)}")
+                return text
+
+            attachments = _fetch_attachments(db, req.attachment_ids or [])
+            try:
+                reply_text, layers_used = await brain_answer(
+                    req.message, gen, attachments=attachments
+                )
+                degraded = (provider_used == "degraded")
+                log.info(f"brain.ok layers={layers_used} reply_chars={len(reply_text)}")
+            except Exception as e:
+                log.exception(f"brain.failed type={type(e).__name__} msg={e!s}")
+                reply_text = "I ran into a problem. Please retry."
+                layers_used = [{"name": BrainLayer.SIMPLE, "weight": 1.0}]
+                degraded = True
+
+            safe_text = sanitize_output(reply_text)
+
+            # Stream the response token-by-token (or in one go for short replies).
+            async for delta in _token_chunks(safe_text):
+                if await request.is_disconnected():
+                    log.info("chat_stream.client_disconnected")
+                    break
+                if delta:
+                    yield _sse("chunk", delta=delta)
+
+            msg = ChatMessage(
+                id=uuid4(),
+                role="assistant",
+                content=safe_text,
+                created_at=__import__("datetime").datetime.utcnow(),
+                layer=BrainLayer(layers_used[0]["name"]) if layers_used else BrainLayer.SIMPLE,
+            )
+            from .db import Message as DMessage2
+            db.add(DMessage2(session_id=session_id, role="assistant",
+                             layer=msg.layer.value, content=safe_text))
+            db.commit()
+
+            log.info(f"chat_stream.ok layers={layers_used} preview={mask_for_log(safe_text)}")
+
+            yield _sse("done", message=msg.model_dump(mode="json"),
+                       layers_used=[{"name": BrainLayer(l["name"]), "weight": l["weight"]}
+                                    for l in layers_used],
+                       degraded=degraded,
+                       provider=provider_used,
+                       attachments_used=[a["id"] for a in (attachments or [])] or None)
+        except Exception as e:
+            log.exception(f"chat_stream.unhandled type={type(e).__name__}")
+            yield _sse("error", detail=str(e) or "stream failure")
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable proxy buffering on Render / nginx
+            "Connection": "keep-alive",
+            "x-correlation-id": get_cid(),
+        },
     )
 
 
