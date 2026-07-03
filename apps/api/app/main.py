@@ -128,8 +128,9 @@ async def chat(req: ChatRequest, db: OrmSession = Depends(get_session)):
     try:
         attachments = _fetch_attachments(db, req.attachment_ids or [])
         reply_text, layers_used = await brain_answer(req.message, gen, attachments=attachments)
-    except Exception:
-        log.exception("brain.failed")
+        log.info(f"brain.ok layers={layers_used} reply_chars={len(reply_text)}")
+    except Exception as e:
+        log.exception(f"brain.failed type={type(e).__name__} msg={e!s}")
         reply_text = "I ran into a problem. Please retry."
         layers_used = [{"name": BrainLayer.SIMPLE, "weight": 1.0}]
         degraded = True
