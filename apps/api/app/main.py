@@ -102,7 +102,6 @@ async def chat(req: ChatRequest, db: OrmSession = Depends(get_session)):
     # Persist / fetch session.
     if req.session_id:
         session_id = str(req.session_id)
-        sess = db.get(__import__("app.db", fromlist=["Session"]).Session if False else None, session_id)  # noqa
         from .db import Session as DSession
         sess = db.get(DSession, session_id)
     else:
