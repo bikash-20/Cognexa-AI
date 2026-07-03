@@ -7,7 +7,7 @@ import { logWarn } from '../../../shared/lib/logger';
 
 type SendInput = { history: ChatMessage[]; userName: string; sessionId?: string; attachmentIds?: string[] };
 
-const ReplyEnvelope = z.object({ reply: ChatReplySchema });
+const ReplyEnvelope = ChatReplySchema;
 
 /**
  * Owns: server state for the chat session.
@@ -94,10 +94,10 @@ export function useChat() {
       return;
     }
 
-    setMessages((prev) => prev.map((m) => (m.id === placeholder.id && next.ok ? next.data.reply.message : m)));
+    setMessages((prev) => prev.map((m) => (m.id === placeholder.id && next.ok ? next.data.message : m)));
     if (next.ok) {
-      setDegraded(Boolean(next.data.reply.degraded));
-      setLayersUsed(next.data.reply.layers_used || []);
+      setDegraded(Boolean(next.data.degraded));
+      setLayersUsed(next.data.layers_used || []);
     }
     setStatus('success');
     qc.invalidateQueries({ queryKey: ['history'] });
