@@ -38,7 +38,7 @@ class ChatMessage(Strict):
 
 
 class ChatRequest(Strict):
-    user_name: str = Field(min_length=1, max_length=60)
+    user_name: str = Field(default="guest", min_length=1, max_length=60)
     message: str = Field(min_length=1, max_length=4000)
     history: list[ChatMessage] = Field(default_factory=list, max_length=40)
     session_id: UUID | None = None
