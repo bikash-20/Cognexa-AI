@@ -103,6 +103,167 @@ def identity_response(message: str) -> str | None:
     )
 
 
+def techstack_response(message: str) -> str | None:
+    """Deterministic reply for meta-questions about COGNEXA's engineering.
+
+    Covers the gateway, deterministic classifier, multi-layer fallback chain,
+    async/SSE streaming, Pydantic v2 contracts, SQLite persistence, and the
+    React/Vite/Tailwind frontend. Fires before any provider is called so the
+    answer is identical regardless of which provider is currently healthy.
+    """
+    t = (message or "").lower()
+    triggers = (
+        "tech stack", "techstack", "tech-stack",
+        "your architecture", "how are you built", "how are you made",
+        "how do you work", "how does it work", "how do you think",
+        "your backend", "your frontend", "your stack",
+        "fallback chain", "fallback architecture", "multi-layer fallback",
+        "dynamic routing", "provider chain", "provider fallback",
+        "asynchronous", "async", "resilience", "error resilience",
+        "state management", "errors and fallback",
+        "deterministic classifier", "deterministic intent", "intent classifier",
+        "the gateway", "your gateway", "the gateway &",
+        "your engineering", "engineering details", "backend details",
+        "how you handle", "how you manage", "errors and fallback",
+        "your providers", "your fallback", "your model",
+        "openai", "cloudflare", "openrouter", "pollinations",
+    )
+    if not any(trigger in t for trigger in triggers):
+        return None
+
+    return (
+        "Here's the engineering under the hood of **COGNEXA AI** 👇\n\n"
+        "### Gateway & Deterministic Intent Classifier\n"
+        "- Every request enters **FastAPI** in `apps/api/app/main.py` and passes "
+        "through a **correlation-id middleware** plus a **global exception guard** "
+        "that returns a fixed error envelope instead of leaking stack traces.\n"
+        "- `security.inspect_input` rejects prompt-injection, suspicious shell "
+        "patterns, and oversized input ( >4000 chars) **before** any LLM call.\n"
+        "- `brain.classify` is a **regex-based layer classifier** — no LLM hop "
+        "is made for routing. It tags the prompt as `math`, `code`, `science`, "
+        "`reasoning`, `compound`, `simple`, or `document`.\n"
+        "- Specialist recipes (`identity_response`, `math_response`, "
+        "`code_response`, `techstack_response`, `skills_response`) are tried "
+        "first. If any returns, the chain stops here and **no external provider "
+        "is ever called** — these are deterministic, zero-hallucination answers.\n\n"
+        "### Multi-Layer Fallback Architecture (Dynamic Routing)\n"
+        "- The provider chain in `providers.py` walks **OpenAI → Cloudflare → "
+        "OpenRouter → Pollinations** in order.\n"
+        "- Each provider has its own **circuit breaker**: 3 fails in 30s opens "
+        "it for 20s, so a flapping upstream cannot stall the request.\n"
+        "- **Pollinations is intentionally last** — it is free, key-less, and "
+        "burns no quota. With zero env vars configured you still get a working "
+        "chatbot, just slower and slightly less accurate.\n"
+        "- When the chain exhausts, a **degraded message** is returned with "
+        "`degraded: true`. The UI shows a soft banner; the conversation keeps "
+        "going — there is no broken state.\n\n"
+        "### Asynchronous Streaming (SSE)\n"
+        "- `POST /api/v1/chat/stream` emits **Server-Sent Events** "
+        "(`session → chunk → done`) with `Cache-Control: no-cache` and "
+        "`X-Accel-Buffering: no` so proxies don't buffer.\n"
+        "- The frontend parses chunks, batches them with "
+        "`requestAnimationFrame` (~30fps), and shows a blinking caret as each "
+        "token lands. An `AbortController` cancels in-flight streams on unmount.\n\n"
+        "### Contracts, Persistence, Security\n"
+        "- **Pydantic v2** with `extra=\"forbid\"` rejects unknown fields at "
+        "the boundary — the same schema validates incoming requests and shapes "
+        "outgoing responses.\n"
+        "- **SQLAlchemy 2 + SQLite** stores sessions and message history; "
+        "attachments cap at 200 KB per file and are stored as extracted text, "
+        "never raw blobs.\n"
+        "- PDF ingestion is **digital-first**: `pdfplumber → pypdf → "
+        "`pdf2image + pytesseract` OCR, pages parallelized in a "
+        "`ThreadPoolExecutor`. OCR is graceful — missing `tesseract`/`poppler` "
+        "downgrades to a per-page warning, not a failure.\n"
+        "- `security.sanitize_output` redacts card-shaped runs, OTP runs, and "
+        "known sensitive key patterns **before** storage and **before** the "
+        "response is sent.\n\n"
+        "### Frontend\n"
+        "- **React 18 + TypeScript (strict) + Vite**, file-style routing via "
+        "`react-router-dom 6`.\n"
+        "- **TanStack Query 5** for history invalidation; `useChat` owns "
+        "optimistic-update bookkeeping for upload-then-ask flows.\n"
+        "- **Tailwind 3 + CSS custom properties** for design tokens and glass "
+        "morphism; **KaTeX** for math; **Shiki** for syntax highlighting in "
+        "chat with a VS-Code-style dark theme.\n"
+        "- **vite-plugin-pwa** adds an install prompt and offline shell.\n\n"
+        "### Deployment\n"
+        "- **Render free tier** hosts the FastAPI service (auto-deploy from "
+        "`main`, no cold-start cost for SQLite).\n"
+        "- **Vercel** hosts the static SPA at the edge.\n\n"
+        "Want me to deep-dive on any single layer — the classifier heuristics, "
+        "the circuit-breaker math, or the SSE parser?"
+    )
+
+
+def skills_response(message: str) -> str | None:
+    """Deterministic reply for questions about Bikash's expertise."""
+    t = (message or "").lower()
+    triggers = (
+        "bikash skills", "bikash's skills", "your founder skills",
+        "founder expertise", "your ceo skills", "ceo skills",
+        "your founder expertise", "your ceo expertise",
+        "bikash expertise", "bikash background",
+        "skills of bikash", "talukder skills", "talukder expertise",
+        "what is bikash good at", "what can bikash do",
+        "frontend and backend", "frontend backend ai", "backend and frontend",
+        "machine learning and deep learning", "ml and dl", "ai/ml/dl",
+        "ai ml dl", "ai machine learning and deep learning",
+        "skilled all of the sector", "skilled in all sector",
+        "skilled across", "all sectors", "all of the sector",
+        "his skills", "his expertise", "your skills", "your expertise",
+    )
+    if not any(trigger in t for trigger in triggers):
+        return None
+
+    return (
+        "**Bikash Talukder** is skilled across every layer of the stack — "
+        "from the browser down to the model weights.\n\n"
+        "### 🎨 Frontend\n"
+        "- **React 18 + TypeScript (strict)** — design systems, optimistic UI, "
+        "SSE consumers, PWA shells.\n"
+        "- **Vite, Next.js, Tailwind, CSS custom properties** — fast iteration, "
+        "narrow bundles, themed glass-morphism.\n"
+        "- **State & data**: TanStack Query, Zustand, Redux Toolkit, custom "
+        "hooks for streaming + optimistic updates.\n"
+        "- **UI craft**: KaTeX-rendered math, Shiki syntax highlighting, "
+        "accessible focus rings, reduced-motion respect.\n\n"
+        "### ⚙️ Backend\n"
+        "- **Python + FastAPI** (async, Pydantic v2 with `extra=\"forbid\"`, "
+        "streaming responses, middleware composition).\n"
+        "- **Node.js + Express / Hono** for high-throughput APIs.\n"
+        "- **SQLAlchemy 2, PostgreSQL, SQLite, Redis** — async sessions, "
+        "migration discipline, connection-pool tuning.\n"
+        "- **Auth & security**: input inspection, output sanitisation, "
+        "prompt-injection defense, circuit breakers, rate limiting.\n\n"
+        "### 🧠 AI / Machine Learning\n"
+        "- **LLM orchestration**: chained providers (OpenAI, Cloudflare, "
+        "OpenRouter, Pollinations), fallback & degradation patterns, "
+        "token-by-token streaming, deterministic classifiers.\n"
+        "- **Retrieval**: vector stores, semantic cache, hybrid search.\n"
+        "- **Classical ML**: scikit-learn, XGBoost, LightGBM, feature "
+        "engineering, evaluation harnesses.\n\n"
+        "### 🔬 Deep Learning\n"
+        "- **PyTorch & TensorFlow / Keras** — training, fine-tuning, and "
+        "evaluating transformer and CNN architectures.\n"
+        "- **Hugging Face Transformers** — LoRA / QLoRA fine-tuning, "
+        "quantization (GPTQ, AWQ, bitsandbytes), inference optimization.\n"
+        "- **Computer Vision**: YOLO, ResNet, ViT, OpenCV pipelines; OCR "
+        "via `pytesseract` + `pdf2image`.\n"
+        "- **NLP**: tokenization, embeddings, RAG, prompt engineering, "
+        "structured-output contracts.\n\n"
+        "### 🛠️ Engineering Practices\n"
+        "- Ships with **strict typing, lint discipline, and small, reviewable "
+        "PRs**. Prefers boring tech that fails loudly over clever tech that "
+        "fails quietly.\n"
+        "- Comfortable across the full lifecycle: **design → prototype → "
+        "ship → measure → iterate**.\n\n"
+        "Bikash's GitHub: https://github.com/bikash-20\n\n"
+        "Want a code sample from any one of these areas, or a deeper write-up "
+        "of how it's wired into COGNEXA?"
+    )
+
+
 def math_response(message: str) -> str | None:
     """Cheap, exact answers for the most common student queries."""
     m = re.search(r"d/dx\s*([a-z0-9_]+)\s*=\s*\?\??", message, re.I)
@@ -155,7 +316,7 @@ async def answer(
     """
     layers = classify(message)
 
-    for fn in (identity_response, math_response, code_response):
+    for fn in (identity_response, math_response, code_response, techstack_response, skills_response):
         fast = fn(message)
         if fast:
             return fast, layers
