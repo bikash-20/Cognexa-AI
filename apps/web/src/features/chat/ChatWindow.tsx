@@ -10,7 +10,8 @@ import { v4 as uuid } from '../../shared/lib/uuid';
 
 export function ChatWindow() {
   const { name } = useUserName();
-  const chat = useChat();
+  // useChat থেকে layersUsed সহ ডিস্ট্রাকচার করা হলো
+  const { messages, status, error, degraded, layersUsed, submit, setMessages } = useChat();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const sessionId = useMemo<string>(() => {
@@ -24,7 +25,7 @@ export function ChatWindow() {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-  }, [chat.messages]);
+  }, [messages]);
 
   if (!name) {
     return (
@@ -36,14 +37,14 @@ export function ChatWindow() {
 
   async function send(text: string) {
     if (!text.trim()) return;
-    await chat.submit(text, name!, sessionId);
+    await submit(text, name!, sessionId);
   }
 
   return (
     <div className="flex h-[100dvh] flex-col">
       <ChatHeader name={name} sessionId={sessionId} />
-      {chat.error && <ErrorBanner message={chat.error} onRetry={() => chat.messages.length > 0 && send(chat.messages[chat.messages.length - 1]!.content)} />}
-      {chat.degraded && (
+      {error && <ErrorBanner message={error} onRetry={() => messages.length > 0 && send(messages[messages.length - 1]!.content)} />}
+      {degraded && (
         <div className="border-b border-amber-300/30 bg-amber-500/10 px-4 py-2 text-center text-xs text-amber-100">
           Running on a fallback provider — answers may be limited.
         </div>
@@ -51,11 +52,11 @@ export function ChatWindow() {
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-4 sm:px-6">
         <div className="mx-auto flex max-w-3xl flex-col gap-4">
-          {chat.messages.length === 0 && <EmptyState name={name} onPick={(q) => send(q)} />}
-          {chat.messages.map((m) => (
+          {messages.length === 0 && <EmptyState name={name} onPick={(q) => send(q)} />}
+          {messages.map((m) => (
             <MessageBubble key={m.id} message={m} />
           ))}
-          {chat.status === 'loading' && (
+          {status === 'loading' && (
             <div className="flex items-center gap-2 self-start text-sm text-rose-100/70">
               <span className="h-2 w-2 animate-orb-pulse rounded-full bg-rose-300" />
               <span className="h-2 w-2 animate-orb-pulse rounded-full bg-rose-300 [animation-delay:120ms]" />
@@ -66,7 +67,7 @@ export function ChatWindow() {
         </div>
       </div>
 
-      <ChatInput onSend={send} disabled={chat.status === 'loading'} />
+      <ChatInput onSend={send} disabled={status === 'loading'} />
     </div>
   );
 }

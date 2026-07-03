@@ -31,7 +31,7 @@ interface FetchOpts<T> {
 
 const MAX_RETRIES = 2;
 const DEFAULT_BACKOFF = 400;
-const DEFAULT_TIMEOUT = 12_000;
+const DEFAULT_TIMEOUT = 28_000;
 
 export async function apiFetch<T>(path: string, opts: FetchOpts<T>): Promise<ApiResult<T>> {
   const url = `${import.meta.env.VITE_API_BASE}${path}`;

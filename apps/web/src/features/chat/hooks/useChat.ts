@@ -21,6 +21,7 @@ export function useChat() {
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
   const [degraded, setDegraded] = useState(false);
+  const [layersUsed, setLayersUsed] = useState<{ name: string; weight: number }[]>([]);
   const inFlight = useRef<AbortController | null>(null);
 
   const send = useMutation({
@@ -75,12 +76,13 @@ export function useChat() {
     }
 
     setMessages((prev) => prev.map((m) => (m.id === placeholder.id ? next.ok ? next.data.reply.message : m : m)));
-    setDegraded(Boolean(next.ok && next.data.reply.degraded));
+     setDegraded(Boolean(next.ok && next.data.reply.degraded));
+     setLayersUsed(next.ok && next.data.reply.layers_used || []);
     setStatus('success');
     qc.invalidateQueries({ queryKey: ['history'] });
   }, [messages, send, qc]);
-
-  return { messages, status, error, degraded, submit, setMessages };
+  return { messages, status, error, degraded, layersUsed, submit, setMessages };
+  
 }
 
 function describe(e: { kind: string; message: string }): string {
