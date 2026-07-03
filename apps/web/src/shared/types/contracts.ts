@@ -14,7 +14,7 @@ export const ChatMessageSchema = z.object({
   content: z.string().min(1).max(20_000),
   created_at: z.string().datetime(),
   layer: BrainLayer.optional(),
-  sources: z.array(z.string()).optional()
+  sources: z.array(z.string()).nullable().optional()
 });
 export type ChatMessage = z.infer<typeof ChatMessageSchema>;
 
@@ -45,7 +45,7 @@ export const ChatReplySchema = z.object({
   message: ChatMessageSchema,
   layers_used: z.array(z.object({ name: BrainLayer, weight: z.number().min(0).max(1) })),
   degraded: z.boolean().optional(),
-  attachments_used: z.array(z.string()).optional()
+  attachments_used: z.array(z.string()).nullable().optional()
 });
 export type ChatReply = z.infer<typeof ChatReplySchema>;
 
