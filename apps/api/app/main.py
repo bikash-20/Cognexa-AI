@@ -43,8 +43,14 @@ app = FastAPI(title="COGNEXA AI", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.cors_origin],
-    allow_methods=["*"], allow_headers=["*"], allow_credentials=False
+    allow_origins=[
+        "https://cognexa-ai.vercel.app",
+        "http://localhost:5173",
+        "http://localhost:4173",
+    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=False,
 )
 
 
