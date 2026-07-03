@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useRef, useState } from 'react';
 import { apiFetch } from '../../../shared/lib/api';
 import {  ChatReplySchema, type ChatMessage } from '../../../shared/types/contracts';
-import { z } from 'zod';
+
 import { logWarn } from '../../../shared/lib/logger';
 
 type SendInput = { history: ChatMessage[]; userName: string; sessionId?: string; attachmentIds?: string[] };
