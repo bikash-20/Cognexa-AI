@@ -119,10 +119,12 @@ async def chat(req: ChatRequest, db: OrmSession = Depends(get_session)):
 
     # Brain + provider chain.
     async def gen(sys: str, user: str) -> str:
-        text, provider = await provider_generate(sys, user, timeout=settings.chat_timeout_s)
-        log.info(f"provider.used name={provider} len={len(text)}")
+        nonlocal provider_used
+        text, provider_used = await provider_generate(sys, user, timeout=settings.chat_timeout_s)
+        log.info(f"provider.used name={provider_used} len={len(text)}")
         return text
 
+    provider_used = "unknown"
     try:
         attachments = _fetch_attachments(db, req.attachment_ids or [])
         reply_text, layers_used = await brain_answer(req.message, gen, attachments=attachments)
@@ -132,7 +134,7 @@ async def chat(req: ChatRequest, db: OrmSession = Depends(get_session)):
         layers_used = [{"name": BrainLayer.SIMPLE, "weight": 1.0}]
         degraded = True
     else:
-        degraded = False
+        degraded = (provider_used == "degraded")
 
     safe_text = sanitize_output(reply_text)
 
@@ -156,6 +158,7 @@ async def chat(req: ChatRequest, db: OrmSession = Depends(get_session)):
         message=msg,
         layers_used=[{"name": BrainLayer(l["name"]), "weight": l["weight"]} for l in layers_used],
         degraded=degraded,
+        provider=provider_used,
         attachments_used=[a["id"] for a in (attachments or [])] or None,
     )
 

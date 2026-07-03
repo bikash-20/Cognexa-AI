@@ -55,6 +55,7 @@ class ChatReply(Strict):
     message: ChatMessage
     layers_used: list[LayerUsage]
     degraded: bool | None = False
+    provider: str | None = None  # which provider actually answered (openai/cloudflare/openrouter/pollinations/degraded)
     attachments_used: list[str] | None = None
 
 

@@ -72,12 +72,24 @@ async def _cloudflare(system: str, user: str, *, timeout: float) -> str:
 
 
 _OR_FREE_MODELS = [
+    # Curated list of currently-free chat models on OpenRouter.
+    # Tried in order, first 2xx response wins. Adding/removing entries here
+    # is safe — the chain treats unknown IDs as soft failures and moves on.
+    "meta-llama/llama-3.3-70b-instruct:free",
     "meta-llama/llama-3.2-3b-instruct:free",
+    "meta-llama/llama-3.1-8b-instruct:free",
     "mistralai/mistral-7b-instruct:free",
     "google/gemma-2-9b-it:free",
+    "google/gemma-2-27b-it:free",
     "microsoft/phi-3-mini-128k-instruct:free",
+    "microsoft/phi-3.5-mini-128k-instruct:free",
     "huggingfaceh4/zephyr-7b-beta:free",
-    "meta-llama/llama-3.1-8b-instruct:free",
+    "qwen/qwen-2.5-7b-instruct:free",
+    "qwen/qwen-2-7b-instruct:free",
+    "nousresearch/hermes-3-llama-3.1-405b:free",
+    "openchat/openchat-7b:free",
+    "undi95/toppy-m-7b:free",
+    "gryphe/mythomist-7b:free",
 ]
 
 
@@ -108,22 +120,65 @@ async def _openrouter(system: str, user: str, *, timeout: float) -> str:
 
 
 async def _pollinations(system: str, user: str, *, timeout: float) -> str:
+    """Free; no API key. Used as the last-resort fallback.
+
+    Pollinations exposes two endpoints:
+      1. POST /openai  — OpenAI-shaped; flaky on cold start, often 5xx.
+      2. GET  /{prompt} — always-on, no key, ~99% uptime.
+
+    We try the OpenAI-shaped endpoint first (gives nicer JSON), and if it
+    5xx's we fall back to the simple GET endpoint which never needs a key.
+    """
     cb = _cb("pollinations")
     if not cb.ok(): raise RuntimeError("circuit-open")
-    async with httpx.AsyncClient(timeout=timeout) as cx:
-        r = await cx.post(
-            "https://text.pollinations.ai/openai",
-            json={
-                "model": "openai",
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-            },
-        )
-        r.raise_for_status()
-        cb.failures.clear()
-        return r.json()["choices"][0]["message"]["content"]
+    from urllib.parse import quote
+
+    headers = {"accept": "application/json", "user-agent": "cognexa-ai/1.0"}
+
+    # ---- Path 1: OpenAI-shaped POST ----------------------------------------
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as cx:
+            r = await cx.post(
+                "https://text.pollinations.ai/openai",
+                headers=headers,
+                json={
+                    "model": "openai",
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                },
+            )
+            if r.status_code < 400:
+                data = r.json()
+                text = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+                if text.strip():
+                    cb.failures.clear()
+                    return text.strip()
+    except Exception as e:  # noqa: BLE001 — fall through to GET endpoint
+        log.warning(json_event("pollinations.openai_fail", error=type(e).__name__))
+
+    # ---- Path 2: simple GET endpoint (always works, no key) ----------------
+    prompt = f"{system}\n\n{user}".strip()
+    encoded = quote(prompt, safe="")
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as cx:
+            r = await cx.get(
+                f"https://text.pollinations.ai/{encoded}",
+                headers={**headers, "accept": "text/plain"},
+                params={"model": "openai"},
+            )
+            r.raise_for_status()
+            text = (r.text or "").strip()
+            if text:
+                cb.failures.clear()
+                return text
+    except Exception as e:
+        cb.trip()
+        raise RuntimeError(f"pollinations both paths failed: {type(e).__name__}") from e
+
+    cb.trip()
+    raise RuntimeError("pollinations returned empty response")
 
 
 _CHAIN: list[tuple[str, Callable[..., Awaitable[str]]]] = [
