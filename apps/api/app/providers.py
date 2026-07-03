@@ -111,10 +111,19 @@ async def _pollinations(system: str, user: str, *, timeout: float) -> str:
     cb = _cb("pollinations")
     if not cb.ok(): raise RuntimeError("circuit-open")
     async with httpx.AsyncClient(timeout=timeout) as cx:
-        r = await cx.get("https://text.pollinations.ai/", params={"system": system, "user": user})
+        r = await cx.post(
+            "https://text.pollinations.ai/openai",
+            json={
+                "model": "openai",
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            },
+        )
         r.raise_for_status()
         cb.failures.clear()
-        return r.text
+        return r.json()["choices"][0]["message"]["content"]
 
 
 _CHAIN: list[tuple[str, Callable[..., Awaitable[str]]]] = [
