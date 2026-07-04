@@ -19,6 +19,10 @@ class Settings(BaseModel):
     cloudflare_api_token: str | None = None
     openrouter_api_key: str | None = None
     elevenlabs_api_key: str | None = None
+    # Dynamic ElevenLabs voice id. Render env may be either ELEVENLABS_VOICE_ID
+    # (preferred) or the legacy lowercase "voice_id" key. Default to the
+    # canonical "Rachel" voice id so the API works out-of-the-box.
+    elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"
     cors_origin: str = "*"
 
 
@@ -26,9 +30,15 @@ class Settings(BaseModel):
 def get_settings() -> Settings:
     raw = {k: os.environ.get(k) for k in (
         "OPENAI_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN",
-        "OPENROUTER_API_KEY", "ELEVENLABS_API_KEY", "DB_URL",
-        "LOG_LEVEL", "CORS_ORIGIN", "REQUEST_TIMEOUT_S", "CHAT_TIMEOUT_S", "TTS_TIMEOUT_S"
+        "OPENROUTER_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID",
+        "DB_URL", "LOG_LEVEL", "CORS_ORIGIN",
+        "REQUEST_TIMEOUT_S", "CHAT_TIMEOUT_S", "TTS_TIMEOUT_S"
     )}
+    # Tolerate the lowercase variant some UIs (and older docs) expose.
+    if not raw.get("ELEVENLABS_VOICE_ID"):
+        legacy = os.environ.get("voice_id")
+        if legacy:
+            raw["ELEVENLABS_VOICE_ID"] = legacy
     try:
         s = Settings(**{k.lower(): v for k, v in raw.items() if v is not None})
     except ValidationError as e:

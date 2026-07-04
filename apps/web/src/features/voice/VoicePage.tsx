@@ -33,24 +33,50 @@ type SR = {
 
 const TTS_TIMEOUT_MS = 12_000;
 
+// ElevenLabs pre-made voices (public IDs). The backend will fall back to
+// `settings.elevenlabs_voice_id` if you pick `default`.
+const VOICE_OPTIONS: Array<{ id: string; label: string }> = [
+  { id: '21m00Tcm4TlvDq8ikWAM', label: 'Rachel (default)' },
+  { id: 'AZnzlk1XvdvUeBnXmlld', label: 'Domi' },
+  { id: 'EXAVITQu4vr4xnSDxMaL', label: 'Bella' },
+  { id: 'ErXwobaYiN019PkySvjV', label: 'Antoni' },
+  { id: 'VR6AewLTigWG4xSOukaG', label: 'Arnold' },
+  { id: 'pNInz6obpgDQGcFmaJgB', label: 'Adam' },
+  { id: 'TxGEqnHWrfWFTfGW9XjX', label: 'Josh' },
+  { id: 'default', label: 'Server default' }
+];
+
 /**
  * Try the server's /api/v1/tts first (ElevenLabs → Cloudflare TTS).
  * On any failure (no keys, 4xx/5xx, network, timeout) fall back to the
  * browser's `speechSynthesis`. We never silently drop audio.
+ *
+ * `voice` is the ElevenLabs voice id (e.g. "21m00Tcm4TlvDq8ikWAM").
+ * Passing the literal string "default" tells the backend to use its
+ * own `settings.elevenlabs_voice_id` (the one set via Render env var).
  */
-async function speak(text: string): Promise<void> {
+async function speak(text: string, voice: string): Promise<void> {
   if (!text.trim()) return;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), TTS_TIMEOUT_MS);
+  // Send `null` when user picked "default" so the server resolves from
+  // its settings (not from the literal string "default").
+  const wireVoice = !voice || voice === 'default' ? null : voice;
   try {
     const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/v1/tts`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text, voice: null }),
+      body: JSON.stringify({ text, voice: wireVoice }),
       signal: ac.signal
     });
     clearTimeout(timer);
     const provider = res.headers.get('x-tts-provider') ?? 'silent';
+    const resolvedVoice = res.headers.get('x-tts-voice') ?? '';
+    // Helpful breadcrumb in DevTools — confirms which voice actually
+    // spoke. The header is set on the backend even when the chosen
+    // voice is overridden by the server's default.
+    // eslint-disable-next-line no-console
+    console.info('[voice] tts', { provider, voice: resolvedVoice, requested: wireVoice });
     if (!res.ok) throw new Error(`tts http ${res.status}`);
     const blob = await res.blob();
     // If the server fell back to a silent WAV, skip playback entirely —
@@ -86,6 +112,12 @@ export function VoicePage() {
   const [listening, setListening] = useState(false);
   const [replying, setReplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // ElevenLabs voice id to send to /api/v1/tts. Stored in localStorage so
+  // it survives reloads. "default" means "use server's settings.elevenlabs_voice_id".
+  const [voiceId, setVoiceId] = useState<string>(() => {
+    try { return localStorage.getItem('cognexa.voice') ?? '21m00Tcm4TlvDq8ikWAM'; }
+    catch { return '21m00Tcm4TlvDq8ikWAM'; }
+  });
   const srRef = useRef<SR | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Mirror state into refs so async callbacks (rec.onend, rec.onresult,
@@ -97,6 +129,9 @@ export function VoicePage() {
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [turns, liveText]);
   useEffect(() => { listeningRef.current = listening; }, [listening]);
   useEffect(() => { replyingRef.current = replying; }, [replying]);
+  useEffect(() => {
+    try { localStorage.setItem('cognexa.voice', voiceId); } catch { /* noop */ }
+  }, [voiceId]);
 
   // Clean up speech engines on unmount so audio doesn't leak across pages.
   useEffect(() => {
@@ -243,7 +278,7 @@ export function VoicePage() {
     setLiveText('');
     // Speak AFTER we render the transcript so the orb stays in 'replying'
     // state for the whole utterance, not just the fetch.
-    try { await speak(reply); } catch { /* swallow — UI still shows text */ }
+    try { await speak(reply, voiceId); } catch { /* swallow — UI still shows text */ }
     replyingRef.current = false;
     setReplying(false);
   }
@@ -254,6 +289,20 @@ export function VoicePage() {
         <Link to="/chat" className="btn-ghost text-sm">Back to chat</Link>
         <span className="font-display text-theme-strong">Voice mode</span>
         <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs">
+            <span className="hidden text-theme-muted sm:inline">Voice</span>
+            <select
+              value={voiceId}
+              onChange={(e) => setVoiceId(e.target.value)}
+              className="rounded-md border border-white/10 bg-black/30 px-2 py-1 text-xs text-theme-strong outline-none focus:border-white/30"
+              aria-label="ElevenLabs voice"
+              title="ElevenLabs voice id"
+            >
+              {VOICE_OPTIONS.map((v) => (
+                <option key={v.id} value={v.id}>{v.label}</option>
+              ))}
+            </select>
+          </label>
           <span className="hidden text-xs text-theme-muted sm:inline">{name ?? ''}</span>
           <ThemeSwitcher />
         </div>

@@ -338,11 +338,33 @@ async def tts(req: TtsRequest):
     new_cid()
     if not req.text.strip():
         raise HTTPException(400, "text required")
-    audio, provider = await tts_mod.synth(req.text, voice=req.voice, timeout=settings.tts_timeout_s)
-    log.info(f"tts.ok provider={provider} bytes={len(audio)}")
+    audio, provider = await tts_mod.synth(
+        req.text,
+        voice=req.voice,
+        timeout=settings.tts_timeout_s,
+        elevenlabs_voice_id=settings.elevenlabs_voice_id,
+    )
+    # Echo back which voice was actually used so the frontend can show it
+    # in DevTools without another round-trip. Resolution order is the same
+    # as in tts.synth():
+    active_voice = (
+        req.voice
+        or settings.elevenlabs_voice_id
+    )
+    log.info(
+        f"tts.ok provider={provider} voice={active_voice} "
+        f"requested_voice={req.voice!r} bytes={len(audio)}"
+    )
     media = "audio/mpeg" if provider != "silent" else "audio/wav"
-    return Response(content=audio, media_type=media,
-                    headers={"x-tts-provider": provider, "x-correlation-id": get_cid()})
+    return Response(
+        content=audio,
+        media_type=media,
+        headers={
+            "x-tts-provider": provider,
+            "x-tts-voice": active_voice,
+            "x-correlation-id": get_cid(),
+        },
+    )
 
 
 # ---- Friendly root for sanity checks ---------------------------------------
