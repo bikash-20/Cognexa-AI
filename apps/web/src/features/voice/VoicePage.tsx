@@ -199,17 +199,34 @@ export function VoicePage() {
     setError(null);
     const res = await apiFetch('/api/v1/chat', {
       method: 'POST',
+      // Generous timeout — Render free tier cold start can eat 20-30s on
+      // the first request after idle, plus the slowest provider in the
+      // fallback chain (Pollinations) can take 25s on its own.
+      timeoutMs: 75_000,
+      retries: 0,
       schema: ChatReplySchema,
-      json: { user_name: name ?? 'friend', message: trimmed, history: [], session_id: undefined }
+      json: {
+        user_name: name ?? 'friend',
+        message: trimmed,
+        history: [],
+        // Omit session_id entirely (don't send `undefined`); the backend
+        // will create a new session, which is what we want for voice.
+        attachment_ids: []
+      }
     });
     if (!res.ok) {
-      setError(
+      // Verbose error so the next debugging session is a 30s console
+      // inspection instead of a 30-minute guessing game. The user still
+      // sees a friendly message.
+      // eslint-disable-next-line no-console
+      console.error('[voice] /api/v1/chat failed', res.error);
+      const detail =
         res.error.kind === 'parse'
-          ? 'Server returned an unexpected reply shape. Try again.'
+          ? 'reply-shape-mismatch'
           : res.error.kind === 'network'
-          ? 'Network error talking to the server.'
-          : `Failed to get a reply (${res.error.kind}).`
-      );
+          ? `network:${res.error.message}`
+          : `http:${res.error.status}`;
+      setError(`Couldn't reach the assistant (${detail}). Tap Stop then Start and try again.`);
       replyingRef.current = false;
       setReplying(false);
       return;
