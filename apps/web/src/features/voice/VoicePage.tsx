@@ -8,12 +8,21 @@ import { z } from 'zod';
 
 type Turn = { role: 'user' | 'assistant'; text: string; id: string };
 
-const TranscriptSchema = z.object({ transcript: z.string(), reply: z.string() });
+// Match the real ChatReply contract from apps/api/app/schemas.py.
+// Reply text lives at `message.content` — NOT a top-level `reply` field.
+const ChatReplySchema = z.object({
+  session_id: z.string(),
+  message: z.object({ role: z.string(), content: z.string() }).passthrough(),
+  layers_used: z.array(z.unknown()).optional(),
+  degraded: z.boolean().optional(),
+  provider: z.string().optional()
+}).passthrough();
 
 /* ---------- Helpers for Web Speech API ---------- */
 type SR = {
   start: () => void;
   stop: () => void;
+  abort: () => void;
   continuous: boolean;
   interimResults: boolean;
   lang: string;
@@ -22,8 +31,48 @@ type SR = {
   onend: () => void;
 };
 
-function speak(text: string) {
+const TTS_TIMEOUT_MS = 12_000;
+
+/**
+ * Try the server's /api/v1/tts first (ElevenLabs → Cloudflare TTS).
+ * On any failure (no keys, 4xx/5xx, network, timeout) fall back to the
+ * browser's `speechSynthesis`. We never silently drop audio.
+ */
+async function speak(text: string): Promise<void> {
+  if (!text.trim()) return;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), TTS_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/v1/tts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text, voice: null }),
+      signal: ac.signal
+    });
+    clearTimeout(timer);
+    const provider = res.headers.get('x-tts-provider') ?? 'silent';
+    if (!res.ok) throw new Error(`tts http ${res.status}`);
+    const blob = await res.blob();
+    // If the server fell back to a silent WAV, skip playback entirely —
+    // we still want to show the text transcript in the UI.
+    if (provider === 'silent' || blob.size < 256) {
+      speakBrowser(text);
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.onended = () => URL.revokeObjectURL(url);
+    audio.onerror = () => { URL.revokeObjectURL(url); speakBrowser(text); };
+    await audio.play().catch(() => speakBrowser(text));
+  } catch {
+    clearTimeout(timer);
+    speakBrowser(text);
+  }
+}
+
+function speakBrowser(text: string) {
   if (!('speechSynthesis' in window)) return;
+  try { speechSynthesis.cancel(); } catch { /* noop */ }
   const u = new SpeechSynthesisUtterance(text);
   u.rate = 1.02;
   u.pitch = 1.05;
@@ -39,8 +88,23 @@ export function VoicePage() {
   const [error, setError] = useState<string | null>(null);
   const srRef = useRef<SR | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Mirror state into refs so async callbacks (rec.onend, rec.onresult,
+  // ask()) can read the latest values without re-subscribing and without
+  // triggering re-renders.
+  const listeningRef = useRef(false);
+  const replyingRef = useRef(false);
 
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [turns, liveText]);
+  useEffect(() => { listeningRef.current = listening; }, [listening]);
+  useEffect(() => { replyingRef.current = replying; }, [replying]);
+
+  // Clean up speech engines on unmount so audio doesn't leak across pages.
+  useEffect(() => {
+    return () => {
+      try { srRef.current?.abort(); } catch { /* noop */ }
+      try { speechSynthesis.cancel(); } catch { /* noop */ }
+    };
+  }, []);
 
   // Lazy Web Speech init (browsers vary).
   function ensureRecognizer(): SR | null {
@@ -50,7 +114,10 @@ export function VoicePage() {
       webkitSpeechRecognition?: new () => SR;
     };
     const Cls = w.SpeechRecognition ?? w.webkitSpeechRecognition;
-    if (!Cls) { setError('This browser does not support speech recognition. Try Chrome/Edge.'); return null; }
+    if (!Cls) {
+      setError('This browser does not support speech recognition. Try Chrome or Edge.');
+      return null;
+    }
     const rec = new Cls();
     rec.continuous = true;
     rec.interimResults = true;
@@ -63,7 +130,8 @@ export function VoicePage() {
     setError(null);
     const rec = ensureRecognizer();
     if (!rec) return;
-    setTurns((t) => [...t, { id: crypto.randomUUID(), role: 'user', text: '' }]);
+    // Permission prompt lives on first call to start(); reuse the recognizer
+    // across turns and just call start() again on auto-end.
     let lastSent = '';
     rec.onresult = (e) => {
       let interim = '';
@@ -78,43 +146,89 @@ export function VoicePage() {
       setLiveText(shown);
       setTurns((prev) => {
         const copy = prev.slice();
-        copy[copy.length - 1] = { ...(copy[copy.length - 1] ?? { id: 'x', role: 'user', text: '' }), text: shown };
+        const last = copy[copy.length - 1];
+        copy[copy.length - 1] = {
+          id: last?.id ?? crypto.randomUUID(),
+          role: last?.role ?? 'user',
+          text: shown
+        };
         return copy;
       });
-      // Send when final result present.
-      if (finalText && finalText !== lastSent) {
+      // Send each new final chunk — multiple utterances per session are fine.
+      if (finalText && finalText.trim() && finalText !== lastSent) {
         lastSent = finalText;
         void ask(finalText);
       }
     };
-    rec.onerror = () => setError('Microphone error. Check permissions.');
-    rec.onend   = () => setListening(false);
-    try { rec.start(); setListening(true); } catch { setError('Could not start microphone.'); }
+    rec.onerror = (e: unknown) => {
+      const code = (e as { error?: string })?.error ?? 'unknown';
+      // 'no-speech' and 'aborted' are normal lifecycle events, not errors.
+      if (code === 'no-speech' || code === 'aborted') return;
+      setError(`Microphone error (${code}). Check permissions.`);
+      setListening(false);
+    };
+    rec.onend = () => {
+      // Auto-restart while the user hasn't explicitly stopped, so silence
+      // gaps (Chrome's default ~5s) don't kill the session.
+      if (srRef.current && listeningRef.current) {
+        try { srRef.current.start(); return; } catch { /* fall through */ }
+      }
+      setListening(false);
+    };
+    try {
+      rec.start();
+      setListening(true);
+      listeningRef.current = true;
+      setTurns((t) => [...t, { id: crypto.randomUUID(), role: 'user', text: '' }]);
+    } catch (e) {
+      setError(`Could not start microphone: ${(e as Error).message}`);
+    }
   }
 
   function stop() {
-    srRef.current?.stop();
+    listeningRef.current = false;
+    try { srRef.current?.stop(); } catch { /* noop */ }
     setListening(false);
   }
 
   async function ask(text: string) {
-    if (!text.trim() || replying) return;
+    const trimmed = text.trim();
+    if (!trimmed || replyingRef.current) return;
+    replyingRef.current = true;
     setReplying(true);
+    setError(null);
     const res = await apiFetch('/api/v1/chat', {
       method: 'POST',
-      schema: TranscriptSchema,
-      json: { user_name: name ?? 'friend', message: text, history: [], session_id: undefined }
+      schema: ChatReplySchema,
+      json: { user_name: name ?? 'friend', message: trimmed, history: [], session_id: undefined }
     });
     if (!res.ok) {
-      setError('Failed to get a reply.');
+      setError(
+        res.error.kind === 'parse'
+          ? 'Server returned an unexpected reply shape. Try again.'
+          : res.error.kind === 'network'
+          ? 'Network error talking to the server.'
+          : `Failed to get a reply (${res.error.kind}).`
+      );
+      replyingRef.current = false;
       setReplying(false);
       return;
     }
-    const reply = res.data.reply;
+    // ChatReply.message.content — not a top-level `reply` field.
+    const reply = res.data.message?.content ?? '';
+    if (!reply) {
+      setError('Empty reply from server.');
+      replyingRef.current = false;
+      setReplying(false);
+      return;
+    }
     setTurns((t) => [...t, { id: crypto.randomUUID(), role: 'assistant', text: reply }]);
     setLiveText('');
+    // Speak AFTER we render the transcript so the orb stays in 'replying'
+    // state for the whole utterance, not just the fetch.
+    try { await speak(reply); } catch { /* swallow — UI still shows text */ }
+    replyingRef.current = false;
     setReplying(false);
-    speak(reply);
   }
 
   return (
