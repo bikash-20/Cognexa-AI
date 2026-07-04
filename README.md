@@ -1,4 +1,6 @@
 # COGNEXA AI
+<img width="1280" height="717" alt="image" src="https://github.com/user-attachments/assets/9d982198-e4b3-4984-b29e-29eb41e4bc5e" />
+
 
 A chat assistant that doesn't lock you out. No account, no signup, no API key to paste in somewhere. You open the URL, you type, you get an answer. That was the whole product idea and everything else hangs off it.
 
