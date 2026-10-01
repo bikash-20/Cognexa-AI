@@ -544,11 +544,13 @@ async def generate_stream(system: str, user: str, *, timeout: float) -> AsyncIte
             if item is None:
                 finished += 1
                 continue
-            # First real chunk — lock the winner, cancel losers.
+            # First real chunk — lock the winner, cancel ONLY the loser tasks.
+            # Cancelling the winner here would kill its pump and stop the
+            # stream mid-response (we'd only see the first chunk).
             if winner is None:
                 winner = name
                 for t in tasks:
-                    if not t.done():
+                    if not t.done() and t.get_name() != f"prov:{name}":
                         t.cancel()
             yield (item, winner)
     finally:
