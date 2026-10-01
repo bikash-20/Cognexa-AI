@@ -1,6 +1,5 @@
 """FastAPI entry. Wires routers, exception envelope, health checks, and logging."""
 from __future__ import annotations
-import asyncio
 import json
 import logging
 import os
@@ -21,8 +20,8 @@ from .schemas import (
     BrainLayer, AttachmentSummary, UploadResponse,
 )
 from .security import inspect_input, sanitize_output, mask_for_log
-from .brain import answer as brain_answer
-from .providers import generate as provider_generate
+from .brain import answer as brain_answer, answer_stream as brain_answer_stream
+from .providers import generate as provider_generate, generate_stream as provider_generate_stream
 from . import tts as tts_mod
 from . import extract as extract_mod
 from .logging_utils import configure as cfg_logging, new_cid, get_cid
@@ -172,33 +171,6 @@ def _sse(event: str, **payload) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, default=str)}\n\n"
 
 
-async def _token_chunks(text: str, chunk_words: int = 3, delay_s: float = 0.03):
-    """Fake-stream a finished string in small word groups.
-
-    Pollinations doesn't expose a streaming endpoint, so we chunk the final
-    reply to give the same UX as native SSE.  Specialist recipes come out
-    whole (single chunk) because they're already short and deterministic.
-    """
-    if not text:
-        yield ""
-        return
-    # Specialist / short answer — yield once for snappiness.
-    if len(text) < 80 or "\n" not in text and " " not in text:
-        yield text
-        return
-    words = text.split(" ")
-    buf: list[str] = []
-    for w in words:
-        buf.append(w)
-        if len(buf) >= chunk_words:
-            yield " ".join(buf) + " "
-            buf = []
-            if delay_s > 0:
-                await asyncio.sleep(delay_s)
-    if buf:
-        yield " ".join(buf)
-
-
 @app.post("/api/v1/chat/stream")
 async def chat_stream(req: ChatRequest, request: Request, db: OrmSession = Depends(get_session)):
     """Server-Sent Events version of /api/v1/chat.
@@ -239,39 +211,46 @@ async def chat_stream(req: ChatRequest, request: Request, db: OrmSession = Depen
 
     async def event_gen():
         nonlocal provider_used, layers_used, safe_text, degraded
+        accumulated: list[str] = []
         try:
             yield _sse("session", session_id=session_id)
 
-            async def gen(sys: str, user: str) -> str:
-                nonlocal provider_used
-                text, provider_used = await provider_generate(
-                    sys, user, timeout=settings.chat_timeout_s
-                )
-                log.info(f"provider.used name={provider_used} len={len(text)}")
-                return text
+            def stream_gen(sys: str, user: str):
+                """Thin adapter so brain.answer_stream() can call us as
+                `async for d, p in generate_stream(...)`. provider_generate_stream
+                is already an async generator, so this is a 1:1 passthrough."""
+                return provider_generate_stream(sys, user, timeout=settings.chat_timeout_s)
 
             attachments = _fetch_attachments(db, req.attachment_ids or [])
             try:
-                reply_text, layers_used = await brain_answer(
-                    req.message, gen, attachments=attachments
-                )
+                first = True
+                async for delta, prov, layers in brain_answer_stream(
+                    req.message, stream_gen, attachments=attachments
+                ):
+                    provider_used = prov
+                    if first:
+                        layers_used = layers
+                        first = False
+                    if not delta:
+                        # Prime yield — layers without content. Skip emission.
+                        continue
+                    if await request.is_disconnected():
+                        log.info("chat_stream.client_disconnected")
+                        break
+                    accumulated.append(delta)
+                    yield _sse("chunk", delta=delta)
                 degraded = (provider_used == "degraded")
-                log.info(f"brain.ok layers={layers_used} reply_chars={len(reply_text)}")
+                log.info(
+                    f"brain.ok layers={layers_used} reply_chars={sum(len(d) for d in accumulated)}"
+                )
             except Exception as e:
                 log.exception(f"brain.failed type={type(e).__name__} msg={e!s}")
-                reply_text = "I ran into a problem. Please retry."
-                layers_used = [{"name": BrainLayer.SIMPLE, "weight": 1.0}]
+                accumulated.append("I ran into a problem. Please retry.")
+                if not layers_used:
+                    layers_used = [{"name": BrainLayer.SIMPLE, "weight": 1.0}]
                 degraded = True
 
-            safe_text = sanitize_output(reply_text)
-
-            # Stream the response token-by-token (or in one go for short replies).
-            async for delta in _token_chunks(safe_text):
-                if await request.is_disconnected():
-                    log.info("chat_stream.client_disconnected")
-                    break
-                if delta:
-                    yield _sse("chunk", delta=delta)
+            safe_text = sanitize_output("".join(accumulated))
 
             msg = ChatMessage(
                 id=uuid4(),

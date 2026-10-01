@@ -3,19 +3,17 @@ import { Link } from 'react-router-dom';
 import { AnimatedOrb } from '../../shared/ui/AnimatedOrb';
 import { ThemeSwitcher } from '../chat/ThemeSwitcher';
 import { useUserName } from '../../shared/lib/user';
-import { apiFetch } from '../../shared/lib/api';
+import { streamChat } from '../../shared/lib/api';
 import { z } from 'zod';
 
 type Turn = { role: 'user' | 'assistant'; text: string; id: string };
 
-// Match the real ChatReply contract from apps/api/app/schemas.py.
-// Reply text lives at `message.content` — NOT a top-level `reply` field.
-const ChatReplySchema = z.object({
-  session_id: z.string(),
-  message: z.object({ role: z.string(), content: z.string() }).passthrough(),
-  layers_used: z.array(z.unknown()).optional(),
-  degraded: z.boolean().optional(),
-  provider: z.string().optional()
+// Match the `done` payload from /api/v1/chat/stream. Reply text lives at
+// `message.content` — NOT a top-level `reply` field.
+const DoneMessageSchema = z.object({
+  id: z.string().optional(),
+  role: z.string().optional(),
+  content: z.string().optional()
 }).passthrough();
 
 /* ---------- Helpers for Web Speech API ---------- */
@@ -232,55 +230,72 @@ export function VoicePage() {
     replyingRef.current = true;
     setReplying(true);
     setError(null);
-    const res = await apiFetch('/api/v1/chat', {
-      method: 'POST',
-      // Generous timeout — Render free tier cold start can eat 20-30s on
-      // the first request after idle, plus the slowest provider in the
-      // fallback chain (Pollinations) can take 25s on its own.
-      timeoutMs: 75_000,
-      retries: 0,
-      schema: ChatReplySchema,
-      json: {
+    const turnId = crypto.randomUUID();
+    setTurns((t) => [...t, { id: turnId, role: 'assistant', text: '' }]);
+    let acc = '';
+    let finalReply = '';
+    const handle = streamChat(
+      {
         user_name: name ?? 'friend',
         message: trimmed,
         history: [],
         // Omit session_id entirely (don't send `undefined`); the backend
         // will create a new session, which is what we want for voice.
         attachment_ids: []
+      },
+      {
+        onChunk: (delta) => {
+          acc += delta;
+          setTurns((prev) =>
+            prev.map((t) => (t.id === turnId ? { ...t, text: acc } : t))
+          );
+        },
+        onDone: (meta) => {
+          // Prefer the authoritative `done.message.content` if the server
+          // sent it; otherwise fall back to the accumulated stream text.
+          const parsed = DoneMessageSchema.safeParse(meta.message);
+          if (parsed.success && parsed.data.content) {
+            finalReply = parsed.data.content;
+            acc = finalReply;
+            setTurns((prev) =>
+              prev.map((t) => (t.id === turnId ? { ...t, text: finalReply } : t))
+            );
+          } else {
+            finalReply = acc;
+          }
+        },
+        onError: (detail) => {
+          // eslint-disable-next-line no-console
+          console.error('[voice] /api/v1/chat/stream failed', { detail });
+          setError(
+            `Couldn't reach the assistant (${detail || 'unknown'}). Tap Stop then Start and try again.`
+          );
+          replyingRef.current = false;
+          setReplying(false);
+        }
       }
-    });
-    if (!res.ok) {
-      // Verbose error so the next debugging session is a 30s console
-      // inspection instead of a 30-minute guessing game. The user still
-      // sees a friendly message.
-      // eslint-disable-next-line no-console
-      console.error('[voice] /api/v1/chat failed', res.error);
-      const detail =
-        res.error.kind === 'parse'
-          ? 'reply-shape-mismatch'
-          : res.error.kind === 'network'
-          ? `network:${res.error.message}`
-          : `http:${res.error.status}`;
-      setError(`Couldn't reach the assistant (${detail}). Tap Stop then Start and try again.`);
+    );
+    // When the stream is fully done, kick off TTS. We don't await it — the
+    // orb keeps pulsing until the audio actually finishes, and the next
+    // user utterance will cancel in-flight TTS via `speakText()` cleanup.
+    handle; // (no-op reference; subscribe lives inside streamChat)
+    // Poll for completion via a sentinel: streamChat doesn't expose a
+    // promise, so we wait until `replyingRef` flips via the onDone path.
+    // The simplest reliable signal is that we no longer have a pending
+    // connection — onDone + onError both flip the ref below.
+    // However we DO need to start TTS once we have the reply; do it on the
+    // next tick and let the orb stay in replying until audio finishes.
+    const startSpeak = async () => {
+      while (!finalReply && replyingRef.current) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const reply = finalReply;
+      if (!reply) return;
+      try { await speak(reply, voiceId); } catch { /* swallow — UI still shows text */ }
       replyingRef.current = false;
       setReplying(false);
-      return;
-    }
-    // ChatReply.message.content — not a top-level `reply` field.
-    const reply = res.data.message?.content ?? '';
-    if (!reply) {
-      setError('Empty reply from server.');
-      replyingRef.current = false;
-      setReplying(false);
-      return;
-    }
-    setTurns((t) => [...t, { id: crypto.randomUUID(), role: 'assistant', text: reply }]);
-    setLiveText('');
-    // Speak AFTER we render the transcript so the orb stays in 'replying'
-    // state for the whole utterance, not just the fetch.
-    try { await speak(reply, voiceId); } catch { /* swallow — UI still shows text */ }
-    replyingRef.current = false;
-    setReplying(false);
+    };
+    void startSpeak();
   }
 
   return (

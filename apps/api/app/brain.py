@@ -6,7 +6,7 @@
 from __future__ import annotations
 import re
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable
+from typing import AsyncIterator, Awaitable, Callable
 
 
 @dataclass
@@ -338,6 +338,53 @@ async def answer(
     sys_prompt = _SYSTEM_PROMPTS.get(top, _SYSTEM_PROMPTS["simple"])
     reply = await generate(sys_prompt, message)
     return reply, layers
+
+
+async def answer_stream(
+    message: str,
+    generate_stream: Callable[[str, str], AsyncIterator[tuple[str, str]]],
+    attachments: list[dict] | None = None,
+) -> AsyncIterator[tuple[str, str, list[dict]]]:
+    """Streaming cousin of `answer()`. Yields (delta, provider_name, layers).
+
+    Specialist recipes (identity, math, code, techstack, skills) short-circuit
+    before any provider is called — they emit a single chunk with the whole
+    deterministic answer and `provider_name = "deterministic"`.
+
+    The first emitted tuple for any non-specialist answer carries an empty
+    delta; this primes the caller with the layer list before real tokens
+    arrive so the UI can render headers immediately.
+    """
+    layers = classify(message)
+    yield ("", "pending", layers)
+
+    # Specialist recipes — zero provider call, zero hallucination.
+    for fn in (identity_response, math_response, code_response,
+               techstack_response, skills_response):
+        fast = fn(message)
+        if fast:
+            yield (fast, "deterministic", layers)
+            return
+
+    # Document Q&A path.
+    if attachments:
+        excerpt_blocks = []
+        for a in attachments:
+            excerpt_blocks.append(
+                f"\n\n----- FILE: {a['filename']} -----\n{a['excerpt']}\n----- END FILE -----"
+            )
+        user_message = message + "".join(excerpt_blocks)
+        sys_prompt = _SYSTEM_PROMPTS["document"]
+        layers_forced = [{"name": "document", "weight": 1.0}]
+        yield ("", "pending", layers_forced)
+        async for delta, prov in generate_stream(sys_prompt, user_message):
+            yield (delta, prov, layers_forced)
+        return
+
+    top = layers[0]["name"] if layers else "simple"
+    sys_prompt = _SYSTEM_PROMPTS.get(top, _SYSTEM_PROMPTS["simple"])
+    async for delta, prov in generate_stream(sys_prompt, message):
+        yield (delta, prov, layers)
 
 
 _IDENTITY_BLOCK = (
