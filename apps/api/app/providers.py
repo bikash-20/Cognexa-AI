@@ -131,8 +131,9 @@ async def _or_free_models() -> list[str]:
 
 
 # Pollinations free models (small, curated; Pollinations rotates these too,
-# but they keep the OpenAI-compatible endpoint stable).
-_POLLINATIONS_MODELS = ["openai", "openai-fast", "qwen-coder", "mistral", "llama"]
+# but they keep the OpenAI-compatible endpoint stable). Order matters:
+# fastest first. `openai-fast` is reliably the quickest on the free tier.
+_POLLINATIONS_MODELS = ["openai-fast", "openai", "qwen-coder", "mistral", "llama"]
 
 
 # ---------------------------------------------------------------------------
@@ -371,8 +372,10 @@ async def _pollinations_stream(
     # take longer because free-tier providers trickle. Total deadline still
     # bounded by `timeout`.
     # Use a per-model read budget so the inner fallback chain completes
-    # quickly when no model is responding.
-    per_model_budget = max(3.0, timeout / 2)
+    # quickly when no model is responding. We allow at least 8s per model so
+    # the first-chunk latency on slow free-tier inference (Toktits in our
+    # observations) doesn't trip the cascade prematurely.
+    per_model_budget = max(8.0, timeout / 2)
     poll_timeout = httpx.Timeout(connect=5.0, read=per_model_budget, write=5.0, pool=5.0)
     for model in _POLLINATIONS_MODELS:
         try:
